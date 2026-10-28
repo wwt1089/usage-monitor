@@ -6,7 +6,7 @@ const SERIES = {
   cache: [['cache_read', '--s-cache-read'], ['cache_creation', '--s-cache-creation']],
   io: [['input', '--s-input'], ['output', '--s-output']],
 };
-const HEALTH_NAMES = { otel: 'OTel', statusline: 'statusline', get_usage: 'get_usage' };
+const HEALTH_NAMES = { otel: 'OTel', statusline: 'statusline', get_usage: 'get_usage', appmeta: '앱 정보' };
 const HEALTH_TEXT = { live: '실시간', recent: '30분 내', idle: '유휴', missing: '수집 끊김 의심' };
 const HEARTBEAT_TIMEOUT_MS = 25000;
 const SINCE_OBS_SHOW_MICROS = 100000;      // 관측 뒤 추정 비용이 $0.10 이상일 때만 표시한다
@@ -207,7 +207,7 @@ function renderSide(s) {
   const model = cur?.model || fallback.model;
   const effort = cur?.model ? cur.effort : fallback.effort;
   $('model').textContent = modelName(model) || '—';
-  $('chips').innerHTML = effort ? `<span>effort ${effort}</span>` : '';
+  $('chips').innerHTML = effort ? `<span>effort ${esc(effort)}</span>` : '';
   $('ctx').textContent = cur?.ctx_pct != null ? `${Math.round(cur.ctx_pct)}%` : '—';
   $('cache').textContent = cur?.cache_hit != null ? `${Math.round(cur.cache_hit * 100)}%` : '—';
   $('cost').textContent = usd(s.today.cost_micros_est);
@@ -215,18 +215,104 @@ function renderSide(s) {
   const extra = Object.values(s.limits).filter(l => l.window.startsWith('7d:') && l.verdict !== 'reset');
   $('extra-windows').textContent = extra.length
     ? '모델별 주간 ' + extra.map(l => `${l.window.slice(3)} ${l.pct}%`).join(' · ') : '';
-  const rows = s.health.length ? s.health : [];
+  // 앱 정보(세션 메타데이터)는 문제가 있을 때만 보인다. 늘 보이면 '크게' 구성에서 한 줄이 늘어 차트와 겹친다
+  const rows = s.health.filter(h => !(h.source === 'appmeta' && h.status === 'live'));
   $('health').innerHTML = rows.map(h =>
-    `<div><span class="dot ${h.status}"></span>${HEALTH_NAMES[h.source] || h.source} · ${HEALTH_TEXT[h.status]} · ${clock(h.last_seen)}</div>`
+    // 2초마다 갱신되는 앱 정보가 오래 소식이 없으면 '읽지 못함'으로 쓴다
+    `<div><span class="dot ${esc(h.status)}"></span>${esc(HEALTH_NAMES[h.source] || h.source)} · ${
+      h.source === 'appmeta' && h.status === 'idle' ? '읽지 못함' : esc(HEALTH_TEXT[h.status])} · ${clock(h.last_seen)}</div>`
   ).join('');
   const hits = s.limit_hits;
   $('hits').innerHTML = hits.count_5h
     ? `<span class="icon-alert"></span>429 한도 응답 ${hits.count_5h}회 · 마지막 ${clock(Math.floor(hits.last_ts / 1000))}` : '';
 }
 
+// ── 세션 상태 ──────────────────────────────────────
+// 위젯(#live, #live-mini)과 세션 페이지(#live-table)가 쓴다. 키오스크에는 이 요소가 없어 그리지 않는다
+const STATE_TEXT = { working: '작업 중', waiting: '승인·응답 대기', decision: '결정 필요', done: '완료', error: '오류' };
+const STATE_ORDER = ['waiting', 'decision', 'error', 'done', 'working'];
+const LIVE_BASE_ITEMS = 5;         // 위젯에 기본으로 보이는 세션 수. 넘치면 아래에 '외 N개' 한 줄
+
+// 위젯에 보일 세션 수: 기본 5개. 완료가 아닌 세션(대기·결정·오류·작업 중)이 5개를 넘으면 그것들은 모두 보인다.
+// 목록은 완료가 맨 아래로 정렬돼 오므로, 앞에서부터 이 개수만큼 자르면 완료만 '외 N개'로 접힌다
+function liveLimit(items) {
+  const active = items.filter(i => i.state !== 'done').length;
+  return Math.max(LIVE_BASE_ITEMS, active);
+}
+const esc = v => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function liveTitle(i) {
+  // 제목이 없으면 폴더 이름, 그것도 없으면 세션 ID 앞부분
+  return i.title || (i.cwd || '').split(/[\\/]/).filter(Boolean).pop() || i.session_id.slice(0, 8);
+}
+function liveStatus(i) {
+  return STATE_TEXT[i.state] + (i.detail ? ' · ' + i.detail : '');
+}
+
+// 앱의 그 세션으로 이동하는 링크(widget_host.session_url과 같은 규칙). 앱 세션 ID를 모르면 null
+const APP_SESSION_RE = /^local_[A-Za-z0-9-]{1,64}$/;
+const sessionLink = appId => (appId && APP_SESSION_RE.test(appId) ? `claude://code/continue?session=${appId}` : null);
+
+async function markSeen(id, appId, openApp = true) {
+  // 1단계: 확인함으로 표시한다(실패해도 다음 스냅샷에서 다시 보인다)
+  try { await fetch('/api/sessions/' + encodeURIComponent(id) + '/seen', { method: 'POST' }); } catch (e) { /* 무시 */ }
+  // 2단계: 위젯 창 안이면 Claude 앱의 그 세션으로 이동한다(세션을 모르면 앱만 띄움)
+  const api = window.pywebview && window.pywebview.api;
+  if (openApp && api && api.open_app) api.open_app(appId || null);
+}
+
+function renderLive(s) {
+  const live = s.live || { items: [], counts: {}, unseen: {} };
+  const items = live.items;
+  const now = nowSec();
+  // 1) 위젯 띠: 기본 5개, 완료 아닌 세션이 더 많으면 모두(대기·진행 중이 위, 완료는 아래). 넘치면 '외 N개' 한 줄
+  const box = $('live');
+  let rows = 0;
+  if (box) {
+    const shown = items.slice(0, liveLimit(items));
+    const html = shown.map(i =>
+      `<div class="live-row${i.seen ? '' : ' unseen'}${i.stale ? ' stale' : ''}" data-state="${i.state}" data-seen="${esc(i.session_id)}" data-app="${esc(i.app_session_id || '')}" title="${esc(liveTitle(i) + ' — ' + liveStatus(i))}">`
+      + `<span class="dot-st"></span><span class="t">${esc(liveTitle(i))}</span>`
+      + `<span class="s">${esc(liveStatus(i))}</span><span class="e">${span(now - i.state_ts)}</span></div>`);
+    if (items.length > shown.length) html.push(`<div class="live-row more">외 ${items.length - shown.length}개</div>`);
+    box.innerHTML = html.join('');
+    box.hidden = !items.length;
+    rows = html.length;
+  }
+  // 2) mini: 개수가 있는 상태만 점과 숫자로
+  const mini = $('live-mini');
+  let miniCounts = 0;
+  if (mini) {
+    const parts = STATE_ORDER.filter(st => live.counts[st]).map(st =>
+      `<span data-state="${st}" title="${STATE_TEXT[st]}"><i></i>${live.counts[st]}</span>`);
+    mini.innerHTML = parts.join('');
+    miniCounts = parts.length;
+  }
+  if (window.onLiveRows) window.onLiveRows(rows, miniCounts);      // widget.js: 창 크기 맞추기
+  // 3) 세션 페이지 표
+  const table = $('live-table');
+  if (table) {
+    table.innerHTML = items.length ? items.map(i =>
+      `<tr class="${i.seen ? '' : 'unseen'}${i.stale ? ' stale' : ''}" data-state="${i.state}">`
+      + `<td><span class="dot-st"></span>${STATE_TEXT[i.state]}</td>`
+      + `<td>${sessionLink(i.app_session_id) ? `<a href="${sessionLink(i.app_session_id)}" title="앱에서 이 세션 열기">${esc(liveTitle(i))}</a>` : esc(liveTitle(i))}</td>`
+      + `<td class="muted">${esc(i.cwd)}</td><td>${esc(i.detail)}</td><td class="tnum">${span(now - i.state_ts)}</td>`
+      + `<td>${i.seen ? '' : `<button data-seen="${esc(i.session_id)}">확인</button>`}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">최근 2시간 안에 활동한 세션이 없습니다</td></tr>';
+  }
+}
+
+// 세션 줄(위젯)을 누르면 확인함 + 앱의 그 세션으로 이동, 확인 버튼(세션 페이지)은 확인함만
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-seen]');
+  if (el) markSeen(el.dataset.seen, el.dataset.app, el.classList.contains('live-row'));
+});
+
 // ── 전체 ───────────────────────────────────────────
 function render() {
   if (!snap) return;
+  renderLive(snap);
+  if (!$('lim-5h')) return;                 // 세션 페이지에는 한도 화면이 없다
   document.body.classList.toggle('idle', snap.mode === 'idle');
   renderLimit($('lim-5h'), snap.limits['5h']);
   renderLimit($('lim-7d'), snap.limits['7d']);
@@ -263,7 +349,8 @@ let shiftIdx = 0;
 setInterval(() => {
   shiftIdx = (shiftIdx + 1) % SHIFTS.length;
   const [dx, dy] = SHIFTS[shiftIdx];
-  $('stage').style.transform = `translate(${dx}px, ${dy}px)`;
+  const stage = $('stage');                 // 세션 페이지에는 없다
+  if (stage) stage.style.transform = `translate(${dx}px, ${dy}px)`;
 }, SHIFT_EVERY_MS);
 
 // 창 크기가 바뀌면 차트를 다시 그린다(배경화면은 모니터마다 크기가 다르다)

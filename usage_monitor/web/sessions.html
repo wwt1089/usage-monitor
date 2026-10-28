@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code 세션 상태</title>
+<link rel="stylesheet" href="/web/tokens.css">
+<link rel="stylesheet" href="/web/sessions.css">
+</head>
+<!-- 브라우저용 세션 상태 표. 키오스크(index.html)는 1920×480 고정이라 따로 둔다. 데이터는 같은 SSE 스냅샷(live) -->
+<body>
+<header>
+  <h1>Claude Code 세션 상태</h1>
+  <div class="offline"><span id="offline-text">수집기 연결 끊김</span></div>
+</header>
+<main>
+  <table>
+    <thead><tr><th>상태</th><th>제목</th><th>폴더</th><th>할 일</th><th>경과</th><th></th></tr></thead>
+    <tbody id="live-table"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
+  </table>
+  <p class="muted">확인 안 한 세션은 굵게 표시합니다. 앱에서 그 세션을 열거나, 다음 지시를 보내거나, 확인을 누르면 풀립니다.</p>
+</main>
+<script src="/web/app.js"></script>
+</body>
+</html>

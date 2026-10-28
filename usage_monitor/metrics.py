@@ -1,6 +1,8 @@
 """화면용 파생 지표. 분 단위 버킷은 저장하지 않고 조회할 때 계산한다."""
 import time
 
+from . import db, session_state
+
 WINDOW_LEN = {"5h": 5 * 3600}          # 그 밖의 창('7d', '7d:<모델>')은 7일
 TREND_SPAN = {"5h": 3600}              # 추세 표본 구간. 그 밖은 6시간
 IDLE_AFTER_SEC = 600                   # 최근 활동이 이보다 오래되면 유휴 화면
@@ -157,4 +159,27 @@ def build_snapshot(conn, now=None):
         "last_request": dict(last_req) if last_req else None,
         "health": health(conn, now),
         "limit_hits": {"count_5h": hits["n"], "last_ts": hits["last"]},
+        "live": live_snapshot(conn, now),
     }
+
+
+LIVE_ITEM_KEYS = ("session_id", "app_session_id", "title", "cwd", "state", "detail", "state_ts",
+                  "last_event_ts")
+UNSEEN_STATES = ("waiting", "decision", "done", "error")
+
+
+def live_snapshot(conn, now):
+    """세션 상태 목록. 보이는 세션만, 상태 우선순위(완료는 아래) → 확인 안 함 → 최근 순."""
+    # 1단계: 보일 세션만 골라 정렬한다(보관된 세션·오래전에 확인한 세션은 빠진다)
+    rows = sorted((r for r in db.list_live(conn) if session_state.is_visible(r, now)), key=session_state.sort_key)
+    # 2단계: 상태별 개수와 확인 안 한 개수
+    counts = {st: 0 for st in session_state.STATES}
+    unseen = {st: 0 for st in UNSEEN_STATES}
+    for r in rows:
+        counts[r["state"]] = counts.get(r["state"], 0) + 1
+        if not r["seen"] and r["state"] in unseen:
+            unseen[r["state"]] += 1
+    # 3단계: 화면이 쓰는 값만 내보낸다
+    items = [dict({k: r[k] for k in LIVE_ITEM_KEYS}, seen=bool(r["seen"]),
+                  stale=session_state.is_stale(r, now)) for r in rows]
+    return {"items": items, "counts": counts, "unseen": unseen}

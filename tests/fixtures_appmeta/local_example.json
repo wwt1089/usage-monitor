@@ -1,0 +1,21 @@
+{
+  "sessionId": "local_11111111-2222-3333-4444-555555555555",
+  "cliSessionId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "cwd": "C:\\work\\example",
+  "createdAt": 1793140000000,
+  "lastFocusedAt": 1793149211461,
+  "lastActivityAt": 1793149224025,
+  "lastTurnEdgeAt": 1793149223682,
+  "isArchived": false,
+  "title": "예시 세션 제목",
+  "titleSource": "auto",
+  "permissionMode": "auto",
+  "completedTurns": 3,
+  "postTurnSummary": {
+    "status_category": "blocked",
+    "status_detail": "awaits OK to install a tool",
+    "needs_action": "도구 설치를 승인할지 답변",
+    "summarizes_uuid": "9f0e7c1a-0000-4000-8000-000000000001"
+  },
+  "lastAssistantUuid": "9f0e7c1a-0000-4000-8000-000000000001"
+}

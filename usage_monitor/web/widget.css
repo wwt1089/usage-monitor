@@ -2,7 +2,7 @@
      mini (200×30) 한 줄: 5시간 %, 7일 %만. "–" 버튼으로 접고 편다
      s (300×132) 한도 두 줄: %·막대·리셋
      m (300×192) s + 소진 예상 문구 + 오늘 비용·요청 + 수집 상태 점
-     l (300×412) m + 최근 60분 토큰 차트 + 현재 세션(모델·컨텍스트·캐시) + 수집 상태 문구
+     l (300×424) m + 최근 60분 토큰 차트 + 현재 세션(모델·컨텍스트·캐시) + 수집 상태 문구
    가까이서 보는 화면이라 글자는 키오스크보다 작다(보조 12px, 본문 13~14px). */
 
 * { box-sizing: border-box; }
@@ -54,7 +54,7 @@ body.idle .stage { filter: brightness(0.75); }
 .icon-alert { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 0.15em; background: var(--critical); margin-right: 0.45em; }
 
 /* ── 차트 (l 구성만) ─────────────────── */
-.center { display: none; flex-direction: column; min-height: 0; }
+.center { display: none; flex-direction: column; min-height: 0; overflow: hidden; }   /* 모자라면 잘라서 아래 글자를 덮지 않게 */
 .burn-view { display: flex; flex-direction: column; }
 .center-head { display: flex; justify-content: space-between; align-items: baseline; }
 .keys { display: flex; gap: 8px; margin: 2px 0; }
@@ -128,3 +128,37 @@ body[data-size="l"] .center { display: flex; }
 body[data-size="l"] .session { display: flex; }
 body[data-size="l"] .health { flex-direction: column; gap: 0; }
 body[data-size="l"] .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 12px; }
+
+/* ── 세션 상태 띠: s · m · l 아래에 붙는다. 줄 높이 22px(widget.js LIVE_ROW_PX와 맞춘다) ── */
+[data-state="working"] { --st-color: var(--st-working); }
+[data-state="waiting"] { --st-color: var(--st-waiting); }
+[data-state="decision"] { --st-color: var(--st-decision); }
+[data-state="done"] { --st-color: var(--st-done); }
+[data-state="error"] { --st-color: var(--st-error); }
+/* 세션 띠는 id로 잡는다. 클래스 .live는 수집 상태 점(.dot.live)과 이름이 같아 점까지 세로 배치로 바뀌었다 */
+#live { display: flex; flex-direction: column; flex-shrink: 0; border-top: 1px solid var(--grid); padding-top: 4px; }
+#live[hidden], body[data-size="mini"] #live { display: none; }
+.live-row {
+  height: 22px; flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+  padding: 0 4px 0 6px; border-left: 3px solid transparent; border-radius: 2px;
+  font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.live-row:hover { background: var(--track); }
+.live-row.unseen { font-weight: 600; border-left-color: var(--st-color); }   /* 확인 안 함: 굵게 + 색 막대 */
+.live-row .dot-st { width: 8px; height: 8px; border-radius: 50%; background: var(--st-color); flex-shrink: 0; }
+.live-row .t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 상태 글자는 줄지 않게(긴 제목이 먼저 말줄임된다). detail이 길 때만 55%에서 자른다 */
+.live-row .s { color: var(--text-2); flex-shrink: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; font-weight: 400; }
+.live-row .e { color: var(--text-3); flex-shrink: 0; font-variant-numeric: tabular-nums; font-weight: 400; }
+.live-row.stale .e { color: var(--idle-dot); }                               /* 오래 소식 없는 작업 중 */
+.live-row.more { color: var(--text-3); cursor: default; }
+.live-row.more:hover { background: none; }
+/* mini: 상태별 개수 점 */
+.live-mini { display: none; }
+body[data-size="mini"] .live-mini { display: inline-flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.live-mini span { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+.live-mini i { width: 7px; height: 7px; border-radius: 50%; background: var(--st-color); display: inline-block; }
+
+/* 확인한 완료: 줄을 흐리게, 점은 속이 빈 원. 확인 안 한 완료(굵게·색 막대·꽉 찬 점)와 한눈에 구분된다 */
+.live-row[data-state="done"]:not(.unseen) { opacity: 0.5; }
+.live-row[data-state="done"]:not(.unseen) .dot-st { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-color); }

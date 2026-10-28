@@ -81,7 +81,26 @@ CREATE TABLE IF NOT EXISTS spool_offsets (
   file_id     TEXT NOT NULL,             -- 파일 교체 감지용 (st_ino:st_ctime_ns)
   offset      INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS live_sessions (  -- 세션 상태(session_state.py 규칙). 세션 hook 스풀과 앱 메타데이터로 채운다
+  session_id     TEXT PRIMARY KEY,         -- hook의 session_id (= 앱 cliSessionId)
+  app_session_id TEXT,                     -- 앱 local_… id
+  host           TEXT,
+  title          TEXT,
+  cwd            TEXT,
+  state          TEXT NOT NULL,            -- working | waiting | decision | done | error
+  detail         TEXT,
+  state_ts       REAL NOT NULL,            -- 상태가 바뀐 시각 (epoch s)
+  last_event_ts  REAL NOT NULL,            -- 마지막으로 반영한 이벤트 시각
+  stop_ts        REAL,                     -- 마지막 Stop 시각 (결정 필요 보강 판단용)
+  seen           INTEGER NOT NULL DEFAULT 1,
+  archived       INTEGER NOT NULL DEFAULT 0
+);
 """
+
+LIVE_COLUMNS = ("session_id", "app_session_id", "host", "title", "cwd", "state", "detail", "state_ts",
+                "last_event_ts", "stop_ts", "seen", "archived")
+LIVE_KEEP_SEC = 7 * 86400                  # 세션 상태 행 보관 기간
 
 
 def _migrate(conn):
@@ -172,6 +191,11 @@ def touch_health(conn, host, source, ts=None):
     )
 
 
+def ensure_health(conn, host, source):
+    """수집 상태 행이 없으면 마지막 수신 0(한 번도 못 받음)으로 만든다. 있으면 그대로 둔다."""
+    conn.execute("INSERT OR IGNORE INTO source_health VALUES (?,?,0)", (host, source))
+
+
 def insert_limit_hit(conn, ts_ms, host, session_id, error):
     conn.execute("INSERT INTO limit_hits VALUES (?,?,?,?)", (ts_ms, host, session_id, error))
 
@@ -197,3 +221,30 @@ def purge_old(conn, retention_days, now=None):
     conn.execute("DELETE FROM limit_observations WHERE ts < ?", (cutoff_s,))
     conn.execute("DELETE FROM limit_hits WHERE ts < ?", (cutoff_s * 1000,))
     conn.execute("DELETE FROM user_prompts WHERE ts < ?", (cutoff_s * 1000,))
+    # 세션 상태는 보관 기간과 별개로 7일만 둔다
+    conn.execute("DELETE FROM live_sessions WHERE last_event_ts < ?", ((now or time.time()) - LIVE_KEEP_SEC,))
+
+
+# ── 세션 상태(live_sessions) ─────────────────────────
+def get_live(conn, session_id):
+    """세션 상태 한 행. 없으면 None."""
+    row = conn.execute("SELECT * FROM live_sessions WHERE session_id=?", (session_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def put_live(conn, row):
+    """세션 상태 행을 통째로 쓴다(session_state가 만든 dict)."""
+    cols = ",".join(LIVE_COLUMNS)
+    marks = ",".join(":" + c for c in LIVE_COLUMNS)
+    conn.execute(f"INSERT OR REPLACE INTO live_sessions ({cols}) VALUES ({marks})",
+                 {c: row.get(c) for c in LIVE_COLUMNS})
+
+
+def list_live(conn):
+    """세션 상태 전체(최근 순). 보관 기간이 7일이라 수가 많지 않다."""
+    return [dict(r) for r in conn.execute("SELECT * FROM live_sessions ORDER BY last_event_ts DESC")]
+
+
+def mark_seen(conn, session_id):
+    """확인함으로 표시한다. 그 세션이 있었으면 True."""
+    return conn.execute("UPDATE live_sessions SET seen=1 WHERE session_id=?", (session_id,)).rowcount > 0

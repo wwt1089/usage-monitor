@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usage Monitor · 전체화면</title>
+<link rel="stylesheet" href="/web/tokens.css">
+<link rel="stylesheet" href="/web/full.css">
+</head>
+<!-- 일반 모니터 전체화면용. 왼쪽은 한도·토큰·오늘·수집 상태(위젯과 같은 id라 app.js가 그대로 그린다),
+     오른쪽은 세션 상태 표(개수 제한 없음). 트레이 메뉴 '전체화면 대시보드'가 띄운다. F11로 창 모드, Alt+F4로 닫는다 -->
+<body class="idle">
+<div class="offline"><span class="icon-alert"></span><span id="offline-text">수집기 연결 끊김</span></div>
+<div class="stage" id="stage">
+<div class="left">
+  <section class="limits">
+    <div class="limit" id="lim-5h">
+      <div class="limit-head"><span class="label">5시간</span><span class="muted reset"></span></div>
+      <div class="limit-body">
+        <div class="pct">—</div>
+        <div class="eta"><div class="eta-main"></div><div class="eta-sub method"></div><div class="eta-sub obs"></div></div>
+      </div>
+      <div class="bar"><div></div></div>
+    </div>
+    <div class="limit" id="lim-7d">
+      <div class="limit-head"><span class="label">7일</span><span class="muted reset"></span></div>
+      <div class="limit-body">
+        <div class="pct">—</div>
+        <div class="eta"><div class="eta-main"></div><div class="eta-sub method"></div><div class="eta-sub obs"></div></div>
+      </div>
+      <div class="bar"><div></div></div>
+    </div>
+    <div class="hits" id="hits"></div>
+  </section>
+
+  <section class="center">
+    <div class="burn-view">
+      <div class="center-head"><span class="label">최근 60분 토큰</span><span class="muted" id="burn-total"></span></div>
+      <div class="keys">
+        <span class="key"><i style="background:var(--s-cache-read)"></i>캐시 읽기</span>
+        <span class="key"><i style="background:var(--s-cache-creation)"></i>캐시 쓰기</span>
+        <span class="key"><i style="background:var(--s-input)"></i>입력</span>
+        <span class="key"><i style="background:var(--s-output)"></i>출력</span>
+      </div>
+      <svg class="chart" id="chart-cache"></svg>
+      <svg class="chart" id="chart-io"></svg>
+      <div class="axis tnum" id="axis"></div>
+    </div>
+    <div class="idle-view">
+      <div class="idle-last muted" id="idle-last">—</div>
+      <span hidden id="idle-r5"></span><span hidden id="idle-r5-at"></span>
+      <span hidden id="idle-r7"></span><span hidden id="idle-r7-at"></span>
+      <span hidden id="idle-today"></span><span hidden id="idle-today-sub"></span>
+    </div>
+  </section>
+
+  <section class="side">
+    <div class="session">
+      <span class="label" id="sess-label">현재 세션</span>
+      <span class="model" id="model">—</span>
+      <span class="chips" id="chips"></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="label">컨텍스트</span><span class="v" id="ctx">—</span></div>
+      <div class="stat"><span class="label">캐시</span><span class="v" id="cache">—</span></div>
+      <div class="stat"><span class="label">오늘</span><span class="v" id="cost">—</span></div>
+      <div class="stat"><span class="label">요청</span><span class="v" id="reqs">—</span></div>
+    </div>
+    <div class="muted" id="extra-windows"></div>
+    <div class="health" id="health"></div>
+  </section>
+</div>
+<section class="sessions">
+  <div class="sessions-head"><span class="label">세션 상태</span><span class="muted">대기·결정·오류 → 작업 중 → 완료</span></div>
+  <table>
+    <thead><tr><th>상태</th><th>제목</th><th>폴더</th><th>할 일</th><th>경과</th><th></th></tr></thead>
+    <tbody id="live-table"><tr><td colspan="6" class="muted">불러오는 중…</td></tr></tbody>
+  </table>
+</section>
+</div>
+<script src="/web/app.js"></script>
+</body>
+</html>

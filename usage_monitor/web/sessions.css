@@ -1,0 +1,48 @@
+/* 세션 상태 페이지(sessions.html). 색은 tokens.css를 쓴다(다크 고정, 다른 화면과 같다) */
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--surface); color: var(--text-1); }
+body { font-family: system-ui, "Segoe UI", "Malgun Gothic", sans-serif; font-size: 14px; line-height: 1.4; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 20px 24px 8px; }
+h1 { margin: 0; font-size: 20px; font-weight: 600; }
+main { padding: 0 24px 24px; }
+.muted { color: var(--text-3); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* 연결 끊김 알림: 끊겼을 때만 */
+.offline { display: none; color: var(--warning); font-size: 13px; }
+body.offline .offline { display: block; }
+
+/* 상태별 색 */
+[data-state="working"] { --st-color: var(--st-working); }
+[data-state="waiting"] { --st-color: var(--st-waiting); }
+[data-state="decision"] { --st-color: var(--st-decision); }
+[data-state="done"] { --st-color: var(--st-done); }
+[data-state="error"] { --st-color: var(--st-error); }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--text-2); border-bottom: 1px solid var(--baseline); padding: 6px 10px; }
+td { padding: 7px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; overflow-wrap: anywhere; }
+td:first-child { white-space: nowrap; border-left: 3px solid transparent; }
+tr.unseen td { font-weight: 600; }
+tr.unseen td:first-child { border-left-color: var(--st-color); }       /* 확인 안 함: 색 막대 */
+tr.stale td.tnum { color: var(--idle-dot); }
+.dot-st { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--st-color); margin-right: 7px; }
+button {
+  padding: 3px 10px; border: 1px solid var(--baseline); border-radius: 4px;
+  background: var(--track); color: var(--text-1); font: inherit; font-weight: 400; cursor: pointer;
+}
+button:hover { background: var(--baseline); }
+
+/* 폭이 좁으면(휴대폰) 폴더 칸을 숨긴다 */
+@media (max-width: 640px) {
+  header, main { padding-left: 16px; padding-right: 16px; }
+  th:nth-child(3), td:nth-child(3) { display: none; }
+}
+
+/* 제목을 누르면 앱의 그 세션으로 이동한다 */
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--baseline); }
+a:hover { text-decoration-color: var(--text-2); }
+
+/* 확인한 완료: 줄을 흐리게, 점은 속이 빈 원. 확인 안 한 완료(굵게·색 막대·꽉 찬 점)와 한눈에 구분된다 */
+tr[data-state="done"]:not(.unseen) td { opacity: 0.5; }
+tr[data-state="done"]:not(.unseen) .dot-st { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-color); }

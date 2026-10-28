@@ -9,6 +9,7 @@
 창 위치·크기는 pywebview가 아니라 Win32 API로 다룬다. pywebview의 테두리 없는 창은 요청한 크기에서
 테두리 몫만큼 작게 만들어지고(300×232 → 284×193), 모니터 배율도 반영하지 않는다.
 """
+import re
 import ctypes
 import json
 import os
@@ -25,8 +26,10 @@ STATE_PATH = HOME / "state" / "widget.json"
 BASE = os.environ.get("USAGE_MONITOR_URL", "http://127.0.0.1:4318").rstrip("/")
 TITLE = "Usage Monitor"
 DEFAULTS = {"size": "m", "w": 300, "h": 192, "x": None, "y": None, "visible": True,
-            "opacity": 100}             # w·h는 CSS 픽셀, x·y는 화면 픽셀, opacity는 불투명도 %
+            "opacity": 100, "scale": 1.0}   # w·h는 CSS 픽셀(배율 포함), x·y는 화면 픽셀, opacity는 불투명도 %, scale은 크기 배율
 OPACITY_LEVELS = (100, 85, 70, 55, 40)  # 위젯 버튼과 트레이 메뉴가 고르는 단계. widget.js와 맞춘다
+SCALE_LEVELS = (0.8, 1.0, 1.2, 1.5)     # 트레이 메뉴의 크기 배율. 그 사이 값은 위젯에서 Ctrl+마우스 휠로(50~200%)
+SCALE_MIN, SCALE_MAX = 0.5, 2.0
 MARGIN = 16                  # 처음 뜰 때 주 모니터 작업 영역의 오른쪽 아래에서 띄우는 거리
 WAIT_HTML = (
     "<body style='margin:0;background:#1a1a19;color:#898781;font:13px system-ui,\"Malgun Gothic\";"
@@ -54,9 +57,16 @@ def load_state():
         return dict(DEFAULTS)
 
 
+_STATE_LOCK = threading.Lock()        # 트레이 메뉴·페이지 API·창 이동 타이머가 함께 저장한다
+
+
 def save_state(state):
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state), encoding="utf-8")
+    """위젯 설정을 저장한다. 여러 스레드가 겹쳐 써도 반쯤 쓰인 파일이 남지 않게 잠그고 한 번에 교체한다."""
+    with _STATE_LOCK:
+        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, STATE_PATH)
 
 
 def find_hwnd():
@@ -129,6 +139,24 @@ def set_opacity(api, state, percent):
     return state["opacity"]
 
 
+# 앱이 받는 세션 ID 형식(앱의 claude:// 처리기와 같은 규칙). 그 밖의 값은 앱만 띄운다
+APP_SESSION_RE = re.compile(r"^local_[A-Za-z0-9-]{1,64}$")
+
+
+def session_url(app_session_id):
+    """앱의 그 세션으로 이동하는 링크. 앱 세션 ID를 모르면 앱만 앞으로 띄운다."""
+    if app_session_id and APP_SESSION_RE.match(app_session_id):
+        return f"claude://code/continue?session={app_session_id}"
+    return "claude://"
+
+
+def set_scale(api, state, scale):
+    """위젯 크기 배율을 50~200% 안으로 맞춰 저장한다. 창 크기는 페이지(widget.js)가 배율을 곱해 set_size로 알린다."""
+    state["scale"] = round(max(SCALE_MIN, min(SCALE_MAX, float(scale))), 2)
+    save_state(state)
+    return state["scale"]
+
+
 class Api:
     """페이지(widget.js)가 부르는 함수. 밑줄로 시작하지 않는 속성은 pywebview가 페이지에 노출하려고
     안쪽까지 훑으므로, 상태와 창 핸들은 밑줄 이름으로 둔다."""
@@ -145,8 +173,19 @@ class Api:
     def set_opacity(self, percent):
         return set_opacity(self, self._state, percent)
 
+    def set_scale(self, scale):
+        return set_scale(self, self._state, scale)
+
+    def open_app(self, app_session_id=None):
+        """세션 줄을 눌렀을 때 Claude 앱의 그 세션으로 이동한다(모르면 앱만 띄움). 실패하면 아무것도 하지 않는다."""
+        try:
+            os.startfile(session_url(app_session_id))
+        except OSError:
+            pass
+
     def get_state(self):
-        return {"size": self._state["size"], "opacity": self._state.get("opacity", 100)}
+        return {"size": self._state["size"], "opacity": self._state.get("opacity", 100),
+                "scale": self._state.get("scale", 1.0)}
 
     def close(self):
         if self._on_close:

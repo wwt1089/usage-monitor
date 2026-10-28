@@ -1,6 +1,8 @@
 """OTLP 파싱과 스풀 tail."""
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -123,5 +125,122 @@ class SpoolTest(unittest.TestCase):
         self.assertEqual(self.conn.execute("SELECT source FROM source_health").fetchone()[0], "get_usage")
 
 
+class SessionSpoolTest(unittest.TestCase):
+    """세션 상태 hook 스풀(session_events.jsonl) → live_sessions."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.conn = db.connect(self.tmp / "t.db")
+        self.path = self.tmp / "session_events.jsonl"
+
+    def put(self, *events):
+        with open(self.path, "a", encoding="utf-8") as f:
+            for e in events:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+    def ev(self, event, ts, sid="s1", **kw):
+        return dict({"ts": ts, "event": event, "session_id": sid, "host": "PC1"}, **kw)
+
+    def poll(self):
+        return spool.SpoolTailer(self.conn, self.path, spool.ingest_session_event, "D").poll()
+
+    def test_session_events_build_live_row(self):
+        self.put(self.ev("UserPromptSubmit", 10, title="물류B02"), self.ev("Notification", 20, ntype="permission_prompt", message="Claude needs your permission to use Bash"))
+        self.assertEqual(self.poll(), 2)
+        row = db.get_live(self.conn, "s1")
+        self.assertEqual((row["state"], row["detail"], row["title"], row["seen"]), ("waiting", "Bash", "물류B02", 0))
+        self.assertEqual([r["session_id"] for r in db.list_live(self.conn)], ["s1"])
+
+    def test_session_event_default_host(self):
+        self.put({"ts": 10, "event": "Stop", "session_id": "s2"})
+        self.poll()
+        self.assertEqual(db.get_live(self.conn, "s2")["host"], "D")
+
+    def test_tailers_include_session_spool(self):
+        names = [t.path.name for t in spool.tailers(self.conn, self.tmp, "D")]
+        self.assertIn("session_events.jsonl", names)
+
+    def test_mark_seen(self):
+        self.put(self.ev("Stop", 10))
+        self.poll()
+        self.assertTrue(db.mark_seen(self.conn, "s1"))
+        self.assertEqual(db.get_live(self.conn, "s1")["seen"], 1)
+        self.assertFalse(db.mark_seen(self.conn, "nope"))
+
+    def test_purge_removes_old_live_rows(self):
+        now = time.time()
+        self.put(self.ev("Stop", now - 8 * 86400, sid="old"), self.ev("Stop", now - 86400, sid="new"))
+        self.poll()
+        db.purge_old(self.conn, 90, now=now)
+        self.assertIsNone(db.get_live(self.conn, "old"))
+        self.assertIsNotNone(db.get_live(self.conn, "new"))
+
+    def test_truncate_if_consumed(self):
+        self.put(self.ev("Stop", 10))
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write((json.dumps(self.ev("Stop", 11)) + "\n") * 90000)       # 약 5.7MB
+        self.poll()
+        self.assertGreater(self.path.stat().st_size, 5_000_000)
+        self.assertTrue(spool.truncate_if_consumed(self.conn, self.path))
+        self.assertEqual(self.path.stat().st_size, 0)
+        self.put(self.ev("Notification", 20, ntype="permission_prompt", message="Claude needs your permission to use Edit"))
+        self.assertEqual(self.poll(), 1)                                      # 비운 뒤 새 줄을 읽는다
+        self.assertEqual(db.get_live(self.conn, "s1")["detail"], "Edit")
+
+    def test_truncate_skips_unread_or_small(self):
+        self.put(self.ev("Stop", 10))
+        self.assertFalse(spool.truncate_if_consumed(self.conn, self.path))     # 아직 안 읽음
+        self.poll()
+        self.assertFalse(spool.truncate_if_consumed(self.conn, self.path))     # 작음
+        self.assertGreater(self.path.stat().st_size, 0)
+        self.assertFalse(spool.truncate_if_consumed(self.conn, self.tmp / "none.jsonl"))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionSpoolValidationTest(unittest.TestCase):
+    """세션 ID나 시각이 없는 줄은 건너뛴다(NULL 키 행이 화면을 깨지 않게)."""
+
+    def test_line_without_session_id_or_ts_skipped(self):
+        tmp = Path(tempfile.mkdtemp())
+        conn = db.connect(tmp / "t.db")
+        path = tmp / "session_events.jsonl"
+        path.write_text(json.dumps({"ts": 10, "event": "Stop", "session_id": None}) + "\n"
+                        + json.dumps({"event": "Stop", "session_id": "x"}) + "\n"
+                        + json.dumps({"ts": 11, "event": "Stop", "session_id": "ok"}) + "\n", encoding="utf-8")
+        with self.assertLogs("usage_monitor.spool", level="WARNING"):
+            self.assertEqual(spool.SpoolTailer(conn, path, spool.ingest_session_event, "D").poll(), 1)
+        self.assertEqual([r["session_id"] for r in db.list_live(conn)], ["ok"])
+
+
+class BadLineTest(unittest.TestCase):
+    """깨진 줄 하나가 스풀 처리를 멈추지 않아야 한다(Codex 리뷰)."""
+
+    def test_bad_lines_skipped_and_good_lines_kept(self):
+        tmp = Path(tempfile.mkdtemp())
+        conn = db.connect(tmp / "t.db")
+        path = tmp / "session_events.jsonl"
+        lines = ["null", "[1, 2]",
+                 json.dumps({"ts": float("nan"), "event": "Stop", "session_id": "nan"}),
+                 json.dumps({"ts": 10, "event": "Notification", "session_id": "num", "ntype": "permission_prompt",
+                             "message": 12345}),
+                 json.dumps({"ts": 11, "event": "Stop", "session_id": "ok"})]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        with self.assertLogs("usage_monitor.spool", level="WARNING"):
+            spool.SpoolTailer(conn, path, spool.ingest_session_event, "D").poll()
+        ids = {r["session_id"] for r in db.list_live(conn)}
+        self.assertIn("ok", ids)
+        self.assertNotIn("nan", ids)
+        self.assertEqual(db.get_live(conn, "num")["detail"], "12345")      # 숫자 문구는 글자로 바꿔 받는다
+        self.assertEqual(db.get_offset(conn, path)[1], path.stat().st_size)  # 끝까지 읽고 넘어간다
+
+    def test_null_line_in_statusline_spool_does_not_block(self):
+        tmp = Path(tempfile.mkdtemp())
+        conn = db.connect(tmp / "t.db")
+        path = tmp / "statusline.jsonl"
+        path.write_text("null\n", encoding="utf-8")
+        with self.assertLogs("usage_monitor.spool", level="WARNING"):
+            spool.SpoolTailer(conn, path, spool.ingest_statusline, "D").poll()
+        self.assertEqual(db.get_offset(conn, path)[1], path.stat().st_size)

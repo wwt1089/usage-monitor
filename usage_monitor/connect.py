@@ -9,6 +9,8 @@
        env        OTel 로그를 로컬 수신기로 보낸다
        statusLine CLI 세션의 한도 관측
        hooks      Desktop 세션의 get_usage 관측 (UserPromptSubmit · PostToolUse · Stop)
+                  세션 상태 기록 (SESSION_EVENTS 7개, async: 기록만 하므로 세션을 기다리게 하지 않는다)
+     한 이벤트에 우리 그룹이 여럿일 수 있다(예: UserPromptSubmit = nudge + 세션 상태)
 
 남의 설정은 건드리지 않는다
   - 이미 다른 statusLine이 있으면 그대로 두고 알린다
@@ -27,10 +29,15 @@ from pathlib import Path
 MARKER = "usage-monitor/hooks/"          # 우리 명령에만 들어 있는 경로 조각 (Python 스크립트 방식)
 HOOK_EXE = "um-hook.exe"                 # 실행 파일 방식. 이 이름도 우리 명령으로 본다
 FROZEN = getattr(sys, "frozen", False)   # PyInstaller로 묶인 실행 파일 안인지
-EXE_ARGS = {"usage_prompt_nudge.py": "nudge", "usage_post_tool.py": "post", "usage_stop_guard.py": "stop"}
+EXE_ARGS = {"usage_prompt_nudge.py": "nudge", "usage_post_tool.py": "post", "usage_stop_guard.py": "stop",
+            "session_event.py": "session"}
 HOOK_FILES = ("statusline.py", "usage_hook_common.py", "usage_prompt_nudge.py",
-              "usage_post_tool.py", "usage_stop_guard.py")
+              "usage_post_tool.py", "usage_stop_guard.py", "session_event.py")
 TOOL_MATCHER = "mcp__ccd_session_mgmt__get_usage"
+# 세션 상태 hook을 거는 이벤트. SessionEnd는 앱이 쉬는 세션을 정리할 때도 와서 쓰지 않는다
+# PermissionRequest는 auto 모드에서 승인 창 없이도 와서 쓰지 않는다(승인 대기는 Notification으로 안다)
+SESSION_EVENTS = ("UserPromptSubmit", "Notification", "PostToolUse",
+                  "PostToolUseFailure", "Stop", "StopFailure", "SessionStart")
 SOURCE_HOOKS = Path(__file__).resolve().parent / "hooks"
 
 
@@ -56,13 +63,23 @@ def _exe_cmd(exe, arg):
 
 
 def desired(hooks_dir, python, port=4318, host=None, hook_exe=None):
-    """등록할 값. hook_exe가 있으면 실행 파일 방식, 없으면 hooks_dir의 스크립트를 python으로 돌린다."""
+    """등록할 값. hook_exe가 있으면 실행 파일 방식, 없으면 hooks_dir의 스크립트를 python으로 돌린다.
+    hooks는 {이벤트: [그룹, …]} 이다."""
     if hook_exe:
         hook = lambda name: {"type": "command", "command": _exe_cmd(hook_exe, EXE_ARGS[name]), "timeout": 10}
         statusline = _exe_cmd(hook_exe, "statusline")
     else:
         hook = lambda name: {"type": "command", "command": _cmd(python, hooks_dir / name, "-S"), "timeout": 10}
         statusline = _cmd(python, hooks_dir / "statusline.py", "-S -I")
+    # 1단계: 한도 관측용 그룹(기존)
+    hooks = {
+        "UserPromptSubmit": [{"hooks": [hook("usage_prompt_nudge.py")]}],
+        "PostToolUse": [{"matcher": TOOL_MATCHER, "hooks": [hook("usage_post_tool.py")]}],
+        "Stop": [{"hooks": [hook("usage_stop_guard.py")]}],
+    }
+    # 2단계: 세션 상태 그룹. 모든 경우에 걸리도록 matcher를 두지 않고, 백그라운드로 돌린다
+    for event in SESSION_EVENTS:
+        hooks.setdefault(event, []).append({"hooks": [dict(hook("session_event.py"), **{"async": True})]})
     return {
         "env": {
             "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
@@ -73,11 +90,7 @@ def desired(hooks_dir, python, port=4318, host=None, hook_exe=None):
             "OTEL_RESOURCE_ATTRIBUTES": f"host.name={host or os.environ.get('COMPUTERNAME') or socket.gethostname()}",
         },
         "statusLine": {"type": "command", "command": statusline},
-        "hooks": {
-            "UserPromptSubmit": {"hooks": [hook("usage_prompt_nudge.py")]},
-            "PostToolUse": {"matcher": TOOL_MATCHER, "hooks": [hook("usage_post_tool.py")]},
-            "Stop": {"hooks": [hook("usage_stop_guard.py")]},
-        },
+        "hooks": hooks,
     }
 
 
@@ -182,8 +195,16 @@ def connect(paths=None, python=None, port=4318, source_hooks=SOURCE_HOOKS, hook_
         report["done"].append("statusLine")
 
     hooks = s.setdefault("hooks", {})
-    for event, entry in want["hooks"].items():
-        hooks[event] = [e for e in hooks.get(event) or [] if not _is_ours(e)] + [entry]
+    # 예전 버전이 넣었지만 이제 쓰지 않는 이벤트에서 우리 그룹을 뺀다(남의 그룹은 그대로)
+    for event in [e for e in hooks if e not in want["hooks"]]:
+        kept = [e for e in hooks[event] or [] if not _is_ours(e)]
+        if kept:
+            hooks[event] = kept
+        else:
+            hooks.pop(event)
+    for event, entries in want["hooks"].items():
+        # 남의 그룹은 앞에 그대로 두고, 우리 그룹은 지운 뒤 새로 넣는다(다시 연결해도 중복되지 않는다)
+        hooks[event] = [e for e in hooks.get(event) or [] if not _is_ours(e)] + entries
     report["done"].append("hooks: " + ", ".join(want["hooks"]))
 
     _save(paths["settings"], s)

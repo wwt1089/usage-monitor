@@ -1,0 +1,102 @@
+/* 일반 모니터 전체화면(full.html). 글자 크기는 화면 높이에 맞춰 커진다(1080px 기준 1rem = 18px).
+   왼쪽 40%: 한도·토큰 차트·현재 세션·오늘·수집 상태 / 오른쪽 60%: 세션 상태 표 */
+* { box-sizing: border-box; }
+html { font-size: clamp(14px, 1.67vh, 32px); }
+html, body {
+  margin: 0; width: 100%; height: 100%; overflow: hidden;
+  background: var(--surface); color: var(--text-1);
+  font-family: system-ui, "Segoe UI", "Malgun Gothic", sans-serif; line-height: 1.35;
+}
+.stage { position: absolute; inset: 0; padding: 1.6rem; display: grid; grid-template-columns: 2fr 3fr; gap: 1.6rem; }
+body.idle .left { filter: brightness(0.85); }
+.label { color: var(--text-2); }
+.muted { color: var(--text-3); font-size: 0.85rem; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* ── 왼쪽 ───────────────────────────── */
+.left { display: flex; flex-direction: column; gap: 1.4rem; min-height: 0; }
+.limits { display: flex; flex-direction: column; gap: 1.2rem; }
+.limit { display: flex; flex-direction: column; gap: 0.4rem; }
+.limit-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.1rem; }
+.limit-body { display: flex; align-items: center; gap: 1.2rem; }
+.pct { font-size: 3.6rem; font-weight: 600; line-height: 1; min-width: 7.5rem; border-radius: 6px; transition: background 0.8s; }
+.pct.flash { background: var(--flash); transition: none; }
+.pct small { font-size: 1.6rem; font-weight: 500; color: var(--text-2); margin-left: 2px; }
+.eta { display: flex; flex-direction: column; min-width: 0; }
+.eta-main { font-size: 1.3rem; }
+.eta-main.alert { font-weight: 700; }
+.eta-sub { color: var(--text-3); font-size: 0.95rem; }
+.bar { height: 0.6rem; background: var(--track); border-radius: 0.3rem; overflow: hidden; }
+.bar > div { height: 100%; border-radius: 0.3rem; width: 0; transition: width 0.6s; }
+.sev-good { background: var(--good); }
+.sev-warning { background: var(--warning); }
+.sev-critical { background: var(--critical); }
+.hits:empty { display: none; }
+.hits { font-size: 0.95rem; }
+.icon-alert { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 0.15em; background: var(--critical); margin-right: 0.45em; }
+
+.center { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; border-top: 1px solid var(--grid); padding-top: 1rem; }
+.burn-view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0.3rem; }
+.center-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.1rem; }
+.keys { display: flex; gap: 1rem; }
+.key { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--text-3); font-size: 0.85rem; }
+.key i { width: 0.7rem; height: 0.7rem; border-radius: 2px; display: inline-block; }
+.chart { display: block; width: 100%; flex: 1; min-height: 3rem; font-size: 0.8rem; }
+.chart text { fill: var(--text-3); font-size: 0.8rem; font-family: inherit; }
+.axis { display: flex; justify-content: space-between; color: var(--text-3); font-size: 0.8rem; padding-right: 3rem; }
+.idle-view { display: none; font-size: 1.1rem; }
+body.idle .burn-view { display: none; }
+body.idle .idle-view { display: block; }
+
+.side { display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--grid); padding-top: 1rem; }
+.session { display: flex; align-items: baseline; gap: 0.6rem; white-space: nowrap; overflow: hidden; }
+.session .label { display: none; }
+.model { font-size: 1.3rem; font-weight: 600; }
+.chips { color: var(--text-3); font-size: 0.95rem; }
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1.2rem; }
+.stat { display: flex; gap: 0.5rem; align-items: baseline; white-space: nowrap; }
+.stat .label { font-size: 0.95rem; color: var(--text-3); }
+.stat .v { font-size: 1.2rem; font-weight: 600; }
+#extra-windows { color: var(--text-3); font-size: 0.9rem; }
+.health { display: flex; flex-wrap: wrap; gap: 0.2rem 1.2rem; }
+.health div { font-size: 0.9rem; color: var(--text-3); white-space: nowrap; }
+.dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.4rem; background: var(--idle-dot); }
+.dot.live { background: var(--good); }
+.dot.recent { background: var(--warning); }
+.dot.missing { background: var(--critical); }
+
+/* ── 오른쪽: 세션 상태 표 ─────────────── */
+[data-state="working"] { --st-color: var(--st-working); }
+[data-state="waiting"] { --st-color: var(--st-waiting); }
+[data-state="decision"] { --st-color: var(--st-decision); }
+[data-state="done"] { --st-color: var(--st-done); }
+[data-state="error"] { --st-color: var(--st-error); }
+.sessions { display: flex; flex-direction: column; min-height: 0; overflow: auto; border-left: 1px solid var(--grid); padding-left: 1.6rem; }
+.sessions-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.2rem; margin-bottom: 0.6rem; }
+table { width: 100%; border-collapse: collapse; font-size: 1.05rem; }
+th { text-align: left; font-weight: 500; color: var(--text-3); font-size: 0.85rem; border-bottom: 1px solid var(--baseline); padding: 0.4rem 0.7rem; white-space: nowrap; }
+td { padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--grid); vertical-align: top; overflow-wrap: anywhere; }
+td:first-child { white-space: nowrap; border-left: 4px solid transparent; }
+tr.unseen td { font-weight: 600; }
+tr.unseen td:first-child { border-left-color: var(--st-color); }          /* 확인 안 함: 색 막대 */
+tr.stale td.tnum { color: var(--idle-dot); }
+td.tnum { white-space: nowrap; color: var(--text-2); }
+.dot-st { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; background: var(--st-color); margin-right: 0.6rem; }
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--baseline); }
+a:hover { text-decoration-color: var(--text-2); }
+button {
+  padding: 0.25rem 0.8rem; border: 1px solid var(--baseline); border-radius: 4px;
+  background: var(--track); color: var(--text-1); font: inherit; font-size: 0.85rem; font-weight: 400; cursor: pointer;
+}
+button:hover { background: var(--baseline); }
+
+/* ── 연결 끊김 ─────────────────────── */
+.offline {
+  display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 2rem; z-index: 5;
+  background: #3a1514; color: var(--text-1); font-size: 0.9rem; align-items: center; justify-content: center;
+}
+body.offline .offline { display: flex; }
+
+/* 확인한 완료: 줄을 흐리게, 점은 속이 빈 원. 확인 안 한 완료(굵게·색 막대·꽉 찬 점)와 한눈에 구분된다 */
+tr[data-state="done"]:not(.unseen) td { opacity: 0.5; }
+tr[data-state="done"]:not(.unseen) .dot-st { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-color); }

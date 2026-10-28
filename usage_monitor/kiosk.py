@@ -76,3 +76,22 @@ def open_kiosk(url):
         "--no-first-run", "--noerrdialogs", "--disable-session-crashed-bubble", "--disable-features=Translate",
     ])
     return True, f"{bar[0]},{bar[1]}에 띄웠습니다"
+
+
+# ── 일반 모니터 전체화면(full.html) ─────────────────
+FULL_PROFILE_DIR = "usage-monitor-full"   # 키오스크와 따로 둬서 둘을 함께 띄울 수 있다
+
+
+def full_command(browser, url, profile):
+    """전체화면 대시보드 명령. --kiosk 대신 --start-fullscreen이라 F11로 창 모드, Alt+F4로 닫을 수 있다."""
+    return [str(browser), "--start-fullscreen", f"--app={url}", f"--user-data-dir={profile}",
+            "--no-first-run", "--noerrdialogs", "--disable-session-crashed-bubble", "--disable-features=Translate"]
+
+
+def open_full(url):
+    """주 모니터에 전체화면 대시보드를 띄우고 (성공 여부, 설명)을 돌려준다."""
+    browser = find_browser()
+    if not browser:
+        return False, "Chrome이나 Edge를 찾지 못했습니다"
+    subprocess.Popen(full_command(browser, url, Path(os.environ["LocalAppData"]) / FULL_PROFILE_DIR))
+    return True, "전체화면 대시보드를 띄웠습니다 (F11 창 모드 · Alt+F4 닫기)"

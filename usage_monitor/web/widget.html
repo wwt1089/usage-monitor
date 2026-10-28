@@ -37,6 +37,7 @@
       <div class="bar"><div></div></div>
     </div>
     <div class="hits" id="hits"></div>
+    <span class="live-mini" id="live-mini"></span>  <!-- mini 구성에서만: 상태별 개수 -->
   </section>
 
   <section class="center">
@@ -75,6 +76,9 @@
     <div class="muted" id="extra-windows"></div>
     <div class="health" id="health"></div>
   </section>
+
+  <!-- 세션 상태 띠. 줄 수만큼 창 높이가 늘어난다(widget.js onLiveRows) -->
+  <section class="live" id="live" hidden></section>
 
 </div>
 <script src="/web/app.js"></script>

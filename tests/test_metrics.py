@@ -100,3 +100,44 @@ class BurnTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveSnapshotTest(unittest.TestCase):
+    """스냅샷의 세션 상태(live) 항목."""
+
+    def setUp(self):
+        self.conn = db.connect(Path(tempfile.mkdtemp()) / "t.db")
+        self.now = 1_800_000_000
+
+    def put(self, sid, state, ago, seen, archived=0, title=None):
+        t = self.now - ago
+        db.put_live(self.conn, {"session_id": sid, "app_session_id": None, "host": "PC1", "title": title,
+                                "cwd": "C:\PDD\\" + sid, "state": state, "detail": None, "state_ts": t,
+                                "last_event_ts": t, "stop_ts": None, "seen": seen, "archived": archived})
+
+    def test_live_snapshot_filters_sorts_counts(self):
+        self.put("w", "waiting", 60, 0, title="대기 세션")
+        self.put("k", "working", 30, 1)
+        self.put("old", "done", 3 * 3600, 1)
+        self.put("arch", "decision", 10, 0, archived=1)
+        live = metrics.live_snapshot(self.conn, self.now)
+        self.assertEqual([i["session_id"] for i in live["items"]], ["w", "k"])
+        self.assertEqual(live["counts"], {"working": 1, "waiting": 1, "decision": 0, "done": 0, "error": 0})
+        self.assertEqual(live["unseen"], {"waiting": 1, "decision": 0, "done": 0, "error": 0})
+        item = live["items"][0]
+        self.assertEqual(set(item), {"session_id", "app_session_id", "title", "cwd", "state", "detail",
+                                     "state_ts", "last_event_ts", "seen", "stale"})
+        self.assertIs(item["seen"], False)
+        self.assertEqual(item["title"], "대기 세션")
+
+    def test_archived_unseen_not_counted(self):
+        self.put("arch", "waiting", 10, 0, archived=1)
+        live = metrics.live_snapshot(self.conn, self.now)
+        self.assertEqual((live["items"], live["unseen"]["waiting"], live["counts"]["waiting"]), ([], 0, 0))
+
+    def test_stale_flag(self):
+        self.put("k", "working", 2000, 1)
+        self.assertIs(metrics.live_snapshot(self.conn, self.now)["items"][0]["stale"], True)
+
+    def test_build_snapshot_has_live(self):
+        self.assertIn("live", metrics.build_snapshot(self.conn, self.now))

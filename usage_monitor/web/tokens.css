@@ -17,4 +17,10 @@
   --s-cache-read: #199e70;
   --s-cache-creation: #c98500;
   --flash: rgba(232, 231, 225, 0.12);
+  /* 세션 상태 색. 색만이 아니라 상태 글자도 함께 보여 준다 */
+  --st-working: #3987e5;
+  --st-waiting: #f08c1a;
+  --st-decision: #a370f0;
+  --st-done: #0ca30c;
+  --st-error: #d03b3b;
 }

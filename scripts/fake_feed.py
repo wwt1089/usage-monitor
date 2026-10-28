@@ -9,6 +9,8 @@
 
 - OTLP: 2~6초마다 api_request 하나를 /v1/logs로 보낸다
 - 한도: 30초마다 statusline 스풀에 한 줄 쓴다. 5h는 --start-pct에서 시간당 --rate %p씩 오른다
+- --sessions: 세션 상태 시나리오(8개: 대기 2, 완료 3, 작업 중 2, 오류 1)를 세션 스풀에 한 번 쓰고 끝낸다
+  --sessions --add-waiting: 새 승인 대기 세션 하나만 덧붙인다(토스트·위젯 띄우기 확인용)
 """
 import argparse
 import json
@@ -46,6 +48,48 @@ def otlp_request(session, host):
                                        "attributes": [{"key": k, "value": av(v)} for k, v in attrs.items()]}]}]}]}
 
 
+def session_scenario(now):
+    """세션 8개. 6줄을 넘겨 '외 N개'와 한글 제목, 오래된 작업 중(회색)을 함께 본다."""
+    ev = lambda sid, kind, ago, **kw: dict({"ts": round(now - ago, 3), "event": kind, "session_id": sid,
+                                            "host": "FAKE-PC"}, **kw)
+    return [
+        ev("f-wait1", "UserPromptSubmit", 300, title="물류B02 흐름 분석", cwd="C:/PDD/물류B02"),
+        ev("f-wait1", "Notification", 120, ntype="permission_prompt",
+           message="Claude needs your permission to use Bash"),
+        ev("f-wait2", "UserPromptSubmit", 200, title="견적 OCR 개선", cwd="C:/PDD/HW_Agent"),
+        ev("f-wait2", "Notification", 60, ntype="permission_prompt",
+           message="Claude needs your permission to use AskUserQuestion"),
+        ev("f-done1", "UserPromptSubmit", 600, title="Node.js 설치 검토"),
+        ev("f-done1", "Stop", 240),
+        ev("f-done2", "UserPromptSubmit", 1200, title="Questi:ON 링크 정리"),
+        ev("f-done2", "Stop", 900),
+        ev("f-done3", "UserPromptSubmit", 1800, title="트렌드리포트 발송 오류 분석"),
+        ev("f-done3", "Stop", 1500),
+        ev("f-work", "UserPromptSubmit", 30, title="사용량 모니터 개선", cwd="C:/PDD/usage-monitor-main"),
+        ev("f-stale", "UserPromptSubmit", 2500, title="응답 없는 세션"),
+        ev("f-err", "UserPromptSubmit", 500, title="PPT 매뉴얼 수정"),
+        ev("f-err", "StopFailure", 400, error="rate_limit"),
+    ]
+
+
+def write_sessions(home, add_waiting):
+    """세션 스풀에 시나리오(또는 새 대기 하나)를 덧붙인다."""
+    path = home / "spool" / "session_events.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    if add_waiting:
+        sid = "f-new-" + uuid.uuid4().hex[:4]
+        lines = [{"ts": round(now, 3), "event": "Notification", "session_id": sid, "host": "FAKE-PC",
+                  "title": "새로 승인 기다리는 세션", "ntype": "permission_prompt",
+                  "message": "Claude needs your permission to use Edit"}]
+    else:
+        lines = session_scenario(now)
+    with open(path, "a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    print(f"세션 이벤트 {len(lines)}줄 → {path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:4319")
@@ -53,11 +97,16 @@ def main():
     ap.add_argument("--start-pct", type=float, default=35)
     ap.add_argument("--rate", type=float, default=15, help="5h 사용률 증가 속도(%%p/시간)")
     ap.add_argument("--host", default="FAKE-PC")
+    ap.add_argument("--sessions", action="store_true", help="세션 상태 시나리오를 쓰고 끝낸다")
+    ap.add_argument("--add-waiting", action="store_true", help="--sessions와 함께: 새 대기 세션 하나만")
     args = ap.parse_args()
 
     home = Path(args.home)
     if home.resolve() == DEFAULT_HOME.resolve():
         raise SystemExit("실제 데이터 폴더에는 쓰지 않는다. --home에 별도 폴더를 준다")
+    if args.sessions:
+        write_sessions(home, args.add_waiting)
+        return
     spool = home / "spool" / "statusline.jsonl"
     spool.parent.mkdir(parents=True, exist_ok=True)
 

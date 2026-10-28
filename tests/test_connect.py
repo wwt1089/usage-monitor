@@ -31,13 +31,16 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(s["theme"], "dark")
         self.assertEqual(s["env"]["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"], "http://127.0.0.1:4318/v1/logs")
         self.assertIn("usage-monitor/hooks/statusline.py", s["statusLine"]["command"])
-        self.assertEqual(sorted(s["hooks"]), ["PostToolUse", "Stop", "UserPromptSubmit"])
+        self.assertEqual(sorted(s["hooks"]), sorted(c.SESSION_EVENTS))
+        self.assertEqual(len(s["hooks"]["UserPromptSubmit"]), 2)            # nudge + 세션
+        self.assertEqual(len(s["hooks"]["Stop"]), 2)                        # stop guard + 세션
+        self.assertEqual(len(s["hooks"]["PostToolUse"]), 2)                 # get_usage + 세션
         self.assertEqual(s["hooks"]["PostToolUse"][0]["matcher"], c.TOOL_MATCHER)
         self.assertTrue((self.paths["hooks_dir"] / "usage_hook_common.py").exists())
         self.assertTrue(Path(report["backup"]).exists())
         self.assertEqual(report["skipped"], [])
         self.assertEqual(c.status(self.paths), {"otel": "ours", "statusline": "ours", "scripts": True,
-                                                "hooks": ["PostToolUse", "Stop", "UserPromptSubmit"]})
+                                                "hooks": sorted(c.SESSION_EVENTS)})
 
         c.disconnect(self.paths)
         self.assertEqual(self.read(), original)
@@ -52,8 +55,8 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(s["statusLine"]["command"], "~/.claude/my-statusline.sh")
         self.assertTrue(any("statusLine" in m for m in report["skipped"]))
         self.assertEqual(s["hooks"]["PostToolUse"][0], theirs_hook)           # 남의 hook이 먼저, 그대로
-        self.assertEqual(len(s["hooks"]["PostToolUse"]), 2)
-        self.assertIn("SessionStart", s["hooks"])
+        self.assertEqual(len(s["hooks"]["PostToolUse"]), 3)
+        self.assertEqual(s["hooks"]["SessionStart"][0], {"hooks": [{"type": "command", "command": "x"}]})
         self.assertEqual(c.status(self.paths)["statusline"], "other")
 
         c.disconnect(self.paths)
@@ -82,8 +85,10 @@ class ConnectTest(unittest.TestCase):
         c.connect(self.paths, python=PY)
         c.connect(self.paths, python=PY)
         s = self.read()
-        self.assertEqual(len(s["hooks"]["Stop"]), 1)
-        self.assertNotIn("D:/dev", s["hooks"]["Stop"][0]["hooks"][0]["command"])
+        self.assertEqual(len(s["hooks"]["Stop"]), 2)
+        self.assertNotIn("D:/dev", json.dumps(s["hooks"]))
+        self.assertEqual({ev: len(g) for ev, g in s["hooks"].items()},
+                         {ev: (2 if ev in ("UserPromptSubmit", "Stop", "PostToolUse") else 1) for ev in c.SESSION_EVENTS})
         self.assertNotIn("D:/dev", s["statusLine"]["command"])
 
     def test_env_changed_after_connect_is_left_alone(self):
@@ -112,6 +117,7 @@ class ConnectTest(unittest.TestCase):
                          '"C:/Users/someone/AppData/Local/Programs/UsageMonitor/um-hook.exe" statusline')
         self.assertTrue(s["hooks"]["Stop"][0]["hooks"][0]["command"].endswith('um-hook.exe" stop'))
         self.assertTrue(s["hooks"]["PostToolUse"][0]["hooks"][0]["command"].endswith('um-hook.exe" post'))
+        self.assertTrue(s["hooks"]["Notification"][0]["hooks"][0]["command"].endswith('um-hook.exe" session'))
         self.assertFalse(self.paths["hooks_dir"].exists())                  # 스크립트는 복사하지 않는다
         self.assertEqual(c.status(self.paths)["statusline"], "ours")
         c.disconnect(self.paths)
@@ -128,6 +134,44 @@ class ConnectTest(unittest.TestCase):
         self.assertEqual(c.status(self.paths)["otel"], "ours")
         c.disconnect(self.paths)
         self.assertEqual(self.read(), {})
+
+    def session_groups(self, s):
+        """세션 hook 그룹만 골라낸다(명령에 session_event가 든 그룹)."""
+        return {ev: [g for g in groups if "session_event" in json.dumps(g)] for ev, groups in s["hooks"].items()}
+
+    def test_session_hooks_are_async_without_matcher(self):
+        self.write({})
+        c.connect(self.paths, python=PY)
+        for ev, groups in self.session_groups(self.read()).items():
+            self.assertEqual(len(groups), 1, ev)
+            self.assertNotIn("matcher", groups[0])
+            hook = groups[0]["hooks"][0]
+            self.assertIs(hook["async"], True)
+            self.assertIn("usage-monitor/hooks/session_event.py", hook["command"])
+            self.assertIn(" -S ", hook["command"])
+        self.assertTrue((self.paths["hooks_dir"] / "session_event.py").exists())
+
+    def test_upgrade_from_previous_connect_adds_session_groups(self):
+        theirs = {"hooks": [{"type": "command", "command": "echo mine"}]}
+        ours = lambda f: {"hooks": [{"type": "command", "command": f"python -S ~/.claude/usage-monitor/hooks/{f}"}]}
+        self.write({"hooks": {"UserPromptSubmit": [theirs, ours("usage_prompt_nudge.py")],
+                              "PostToolUse": [dict(ours("usage_post_tool.py"), matcher=c.TOOL_MATCHER)],
+                              "Stop": [ours("usage_stop_guard.py")]}})
+        c.connect(self.paths, python=PY)
+        s = self.read()
+        self.assertEqual(sorted(s["hooks"]), sorted(c.SESSION_EVENTS))
+        self.assertEqual(s["hooks"]["UserPromptSubmit"][0], theirs)
+        self.assertEqual(len(s["hooks"]["UserPromptSubmit"]), 3)
+
+    def test_events_no_longer_used_are_cleaned_on_reconnect(self):
+        ours = {"hooks": [{"type": "command", "command": "python -S ~/.claude/usage-monitor/hooks/session_event.py"}]}
+        theirs = {"hooks": [{"type": "command", "command": "echo mine"}]}
+        self.write({"hooks": {"PermissionRequest": [theirs, ours], "SessionEnd": [ours]}})
+        c.connect(self.paths, python=PY)
+        s = self.read()
+        self.assertNotIn("PermissionRequest", c.SESSION_EVENTS)
+        self.assertEqual(s["hooks"]["PermissionRequest"], [theirs])          # 남의 것만 남는다
+        self.assertNotIn("SessionEnd", s["hooks"])                           # 우리 것만 있던 이벤트는 지운다
 
 
 if __name__ == "__main__":

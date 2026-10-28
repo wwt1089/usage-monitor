@@ -1,4 +1,5 @@
-"""스풀 JSONL tail. statusline.jsonl(CLI)과 usage_tool.jsonl(Desktop get_usage hook)을 읽는다.
+"""스풀 JSONL tail. statusline.jsonl(CLI), usage_tool.jsonl(Desktop get_usage hook),
+session_events.jsonl(세션 상태 hook)을 읽는다.
 
 - 바이트 오프셋을 DB(spool_offsets)에 저장해 재시작 후 이어 읽는다
 - 파일이 바뀌었거나(st_ino 변경) 잘렸으면(크기 < 오프셋) 처음부터 읽는다
@@ -6,9 +7,11 @@
 """
 import json
 import logging
+import math
+import os
 from datetime import datetime
 
-from . import db
+from . import db, session_state
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +100,7 @@ class SpoolTailer:
                     rec = json.loads(line.decode("utf-8"))
                     self.handler(self.conn, rec, self.default_host)
                     n += 1
-                except (ValueError, KeyError, TypeError) as e:
+                except (ValueError, KeyError, TypeError, AttributeError) as e:   # null·배열 줄도 그 줄만 건너뛴다
                     log.warning("스풀 줄 건너뜀 %s: %s", self.path.name, e)
             db.set_offset(self.conn, self.path, file_id, offset + end + 1)
             self.conn.execute("COMMIT")
@@ -111,4 +114,41 @@ def tailers(conn, spool_dir, default_host):
     return [
         SpoolTailer(conn, spool_dir / "statusline.jsonl", ingest_statusline, default_host),
         SpoolTailer(conn, spool_dir / "usage_tool.jsonl", ingest_get_usage, default_host),
+        SpoolTailer(conn, spool_dir / "session_events.jsonl", ingest_session_event, default_host),
     ]
+
+
+def ingest_session_event(conn, rec, default_host):
+    """세션 상태 hook 한 줄 → live_sessions (전이 규칙은 session_state.apply_event)."""
+    # 1단계: 객체·세션 ID(문자열)·유한한 시각(숫자)이 아니면 버린다. tailer가 경고를 남기고 그 줄만 건너뛴다
+    if not isinstance(rec, dict):
+        raise ValueError("객체가 아님")
+    if not isinstance(rec.get("session_id"), str) or not rec["session_id"]:
+        raise ValueError("session_id 없음")
+    ts = rec.get("ts")
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts):
+        raise ValueError("ts 없음")
+    # 2단계: 글자 칸은 글자로 맞추고(숫자 문구 등), 호스트가 없으면 기본값을 붙인다
+    ev = dict(rec)
+    for key in ("event", "title", "cwd", "tool", "ntype", "message", "error", "agent_id", "host"):
+        if ev.get(key) is not None and not isinstance(ev[key], str):
+            ev[key] = str(ev[key])
+    ev["host"] = ev.get("host") or default_host
+    # 3단계: 지금 행에 이벤트를 적용해 다시 쓴다
+    db.put_live(conn, session_state.apply_event(db.get_live(conn, ev["session_id"]), ev))
+
+
+def truncate_if_consumed(conn, path, max_bytes=5_000_000):
+    """다 읽은 스풀이 max_bytes를 넘으면 비운다. 비웠으면 True.
+
+    tailer는 '크기 < 저장된 오프셋'이면 처음부터 읽으므로, 오프셋도 0으로 맞춰 둔다."""
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    saved_id, offset = db.get_offset(conn, path)
+    if st.st_size <= max_bytes or offset != st.st_size or saved_id != str(st.st_ino):
+        return False
+    os.truncate(path, 0)
+    db.set_offset(conn, path, saved_id, 0)
+    return True

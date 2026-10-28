@@ -4,7 +4,10 @@
 - GET  /api/snapshot 화면 최초 로드용 전체 상태
 - GET  /stream       SSE. 변경 시 스냅샷, 10초마다 heartbeat, 30초마다 스냅샷(시간이 흐르며 바뀌는 값용)
 - GET  /             정적 대시보드(web/)
-백그라운드: 스풀 tail(0.5초), 집계(5분, rollup.py), 보관 기간 정리(하루 1회)
+- GET  /sessions     세션 상태 표(web/sessions.html)
+- GET  /full         일반 모니터 전체화면 대시보드(web/full.html)
+- POST /api/sessions/{id}/seen  세션 상태를 "확인함"으로
+백그라운드: 스풀 tail(0.5초), 앱 세션 메타데이터(2초, appmeta.py), 집계(5분, rollup.py), 보관 기간 정리(하루 1회)
 """
 import asyncio
 import gzip
@@ -22,7 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config as config_mod
-from . import db, metrics, otlp, rollup, spool
+from . import appmeta, db, metrics, otlp, rollup, session_state, spool
 from .sse import Hub
 
 log = logging.getLogger("usage-monitor")
@@ -34,6 +37,7 @@ CHANGE_DEBOUNCE_SEC = 0.3
 PURGE_EVERY_SEC = 86400
 ROLLUP_EVERY_SEC = 300
 RUN_TOUCH_SEC = 60
+APPMETA_POLL_SEC = 2
 
 
 class FreshStaticFiles(StaticFiles):
@@ -54,6 +58,7 @@ class State:
         self.dirty = asyncio.Event()
         self.tailers = spool.tailers(self.conn, cfg.spool_dir, cfg.default_host)
         self.since_obs_written = None
+        self.appmeta = appmeta.AppMetaReader(cfg.appmeta_glob or appmeta.default_glob())
 
     def snapshot(self):
         return metrics.build_snapshot(self.conn)
@@ -113,6 +118,39 @@ async def publish_loop(st):
             last_beat = now
 
 
+def apply_appmeta(st, now):
+    """앱 메타데이터를 다시 읽고, 세션 상태 행에 보강을 적용한다. 바뀐 행이 있으면 True."""
+    # 1단계: 바뀐 파일만 읽는다
+    st.appmeta.poll(now)
+    if st.appmeta.files_seen:
+        db.touch_health(st.conn, st.cfg.default_host, "appmeta", int(now))
+    # 2단계: 모든 행에 최신 메타데이터를 적용한다(행이 hook으로 바뀐 뒤에도 다시 맞추도록 매번 전부)
+    changed = False
+    for row in db.list_live(st.conn):
+        meta = st.appmeta.cache.get(row["session_id"])
+        if not meta:
+            continue
+        new = session_state.apply_meta(row, meta)
+        if new != row:
+            db.put_live(st.conn, new)
+            changed = True
+    return changed
+
+
+async def appmeta_loop(st):
+    """앱 세션 메타데이터로 '결정 필요'·'열어 봄'·제목을 보강한다. 설정으로 끌 수 있다."""
+    if not st.cfg.appmeta_enabled:
+        return
+    db.ensure_health(st.conn, st.cfg.default_host, "appmeta")
+    while True:
+        try:
+            if apply_appmeta(st, time.time()):
+                st.mark_changed()
+        except Exception:
+            log.exception("앱 메타데이터 반영 실패")
+        await asyncio.sleep(APPMETA_POLL_SEC)
+
+
 async def rollup_loop(st):
     """가동 구간을 1분마다 남기고, 5분마다 최근 이틀을 다시 집계한다."""
     run_id = rollup.start_run(st.conn)
@@ -134,6 +172,7 @@ async def purge_loop(st):
         try:
             rollup.rollup(st.conn)                # 지우기 전에 집계를 맞춘다
             db.purge_old(st.conn, st.cfg.retention_days)
+            spool.truncate_if_consumed(st.conn, st.cfg.spool_dir / "session_events.jsonl")
         except Exception:
             log.exception("보관 기간 정리 실패")
         await asyncio.sleep(PURGE_EVERY_SEC)
@@ -146,7 +185,7 @@ def create_app(cfg=None):
     async def lifespan(app):
         st = State(cfg)
         app.state.st = st
-        tasks = [asyncio.create_task(f(st)) for f in (spool_loop, publish_loop, rollup_loop, purge_loop)]
+        tasks = [asyncio.create_task(f(st)) for f in (spool_loop, publish_loop, rollup_loop, purge_loop, appmeta_loop)]
         log.info("수신기 시작 %s:%s db=%s spool=%s", cfg.bind, cfg.port, cfg.db_path, cfg.spool_dir)
         try:
             yield
@@ -202,6 +241,17 @@ def create_app(cfg=None):
             st.mark_changed()
         return JSONResponse({"partialSuccess": {}})
 
+    @app.post("/api/sessions/{session_id}/seen")
+    async def mark_seen(session_id: str, request: Request):
+        """위젯·대시보드에서 세션을 눌렀을 때. 확인함으로 표시한다."""
+        if cfg.auth_token and request.headers.get("authorization") != f"Bearer {cfg.auth_token}":
+            raise HTTPException(401)
+        st = request.app.state.st
+        if not db.mark_seen(st.conn, session_id):
+            raise HTTPException(404)
+        st.mark_changed()
+        return {"ok": True}
+
     @app.get("/api/snapshot")
     async def snapshot(request: Request):
         return request.app.state.st.snapshot()
@@ -214,6 +264,16 @@ def create_app(cfg=None):
             st.hub.stream(first), media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/full")
+    async def full_page():
+        """일반 모니터 전체화면 대시보드(한도·토큰 + 세션 상태 표)."""
+        return FileResponse(WEB_DIR / "full.html", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/sessions")
+    async def sessions_page():
+        """브라우저용 세션 상태 표. 키오스크 화면(/)은 1920×480 고정이라 따로 둔다."""
+        return FileResponse(WEB_DIR / "sessions.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/")
     async def index():

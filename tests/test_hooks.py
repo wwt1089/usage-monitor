@@ -111,6 +111,58 @@ class HookRunTest(unittest.TestCase):
         self.assertEqual(rec["five_hour"], {"pct": 4, "resets_at": 1791366000})
         self.assertIsNone(rec["seven_day"])
 
+    # ── 세션 상태 hook ─────────────────────────────────
+    def session_lines(self):
+        path = self.spool / "session_events.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_session_event_writes_line_without_output(self):
+        stdin = {"session_id": "s1", "hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                 "tool_input": {"command": "rm -rf secret"}, "prompt": "비밀 프롬프트", "cwd": "C:\\PDD"}
+        out = run("session_event.py", stdin, self.home)
+        self.assertEqual(out, "")
+        [rec] = self.session_lines()
+        self.assertEqual((rec["event"], rec["session_id"], rec["tool"]), ("PermissionRequest", "s1", "Bash"))
+        self.assertNotIn("tool_input", rec)
+        self.assertNotIn("prompt", rec)
+        self.assertNotIn("secret", json.dumps(rec))
+        self.assertIsInstance(rec["ts"], float)
+
+    def test_korean_title_kept(self):
+        stdin = {"session_id": "s1", "hook_event_name": "UserPromptSubmit", "session_title": "물류B02 흐름 분석",
+                 "cwd": "C:\\PDD\\물류B02", "prompt": "x"}
+        run("session_event.py", stdin, self.home)
+        [rec] = self.session_lines()
+        self.assertEqual((rec["title"], rec["cwd"]), ("물류B02 흐름 분석", "C:\\PDD\\물류B02"))
+
+    def test_session_event_fields_for_notification_and_failure(self):
+        run("session_event.py", {"session_id": "s1", "hook_event_name": "Notification",
+                                 "notification_type": "permission_prompt", "message": "가" * 300}, self.home)
+        run("session_event.py", {"session_id": "s1", "hook_event_name": "StopFailure", "error": "rate_limit",
+                                 "last_assistant_message": "API Error"}, self.home)
+        note, fail = self.session_lines()
+        self.assertEqual((note["ntype"], len(note["message"])), ("permission_prompt", 200))
+        self.assertEqual(fail["error"], "rate_limit")
+        self.assertNotIn("last_assistant_message", fail)
+
+    def test_session_event_respects_disable(self):
+        self.home.mkdir(parents=True, exist_ok=True)
+        (self.home / "disable").write_text("", encoding="utf-8")
+        run("session_event.py", {"session_id": "s1", "hook_event_name": "Stop"}, self.home)
+        self.assertEqual(self.session_lines(), [])
+
+    def test_session_event_bad_input_exit_zero(self):
+        e = dict(os.environ, USAGE_MONITOR_HOME=str(self.home))
+        p = subprocess.run([sys.executable, "-S", str(HOOKS / "session_event.py")], input=b"not json",
+                           capture_output=True, env=e, timeout=20)
+        self.assertEqual((p.returncode, p.stdout), (0, b""))
+
+    def test_session_event_records_for_cli_too(self):
+        run("session_event.py", {"session_id": "c1", "hook_event_name": "Stop"}, self.home, entrypoint="cli")
+        self.assertEqual(self.session_lines()[0]["session_id"], "c1")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ SPOOL = ROOT / "spool"
 STATE = ROOT / "state"
 USAGE_SPOOL = SPOOL / "usage_tool.jsonl"
 STATUSLINE_SPOOL = SPOOL / "statusline.jsonl"
+SESSION_SPOOL = SPOOL / "session_events.jsonl"     # 세션 상태 hook(session_event.py)이 쓴다
 SINCE_OBS = STATE / "since_obs.json"
 DISABLE = ROOT / "disable"
 

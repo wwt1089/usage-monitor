@@ -43,7 +43,8 @@ from usage_monitor.tray import make_icon
 make_icon(None).save(icon_file, sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
 
 HOOK_MODULES = [f"usage_monitor.hooks.{m}" for m in
-                ("statusline", "usage_hook_common", "usage_prompt_nudge", "usage_post_tool", "usage_stop_guard")]
+                ("statusline", "usage_hook_common", "usage_prompt_nudge", "usage_post_tool", "usage_stop_guard",
+                 "session_event")]
 
 app = Analysis(
     [os.path.join(SPECPATH, "entry_app.py")],
