@@ -124,13 +124,16 @@ def apply_appmeta(st, now):
     st.appmeta.poll(now)
     if st.appmeta.files_seen:
         db.touch_health(st.conn, st.cfg.default_host, "appmeta", int(now))
+    elif st.appmeta.files_found:
+        # 파일은 있는데 하나도 못 읽으면(형식 변경) 수집 상태에 '읽지 못함'이 보이도록 행을 둔다
+        db.ensure_health(st.conn, st.cfg.default_host, "appmeta")
     # 2단계: 모든 행에 최신 메타데이터를 적용한다(행이 hook으로 바뀐 뒤에도 다시 맞추도록 매번 전부)
     changed = False
     for row in db.list_live(st.conn):
         meta = st.appmeta.cache.get(row["session_id"])
         if not meta:
             continue
-        new = session_state.apply_meta(row, meta)
+        new = session_state.apply_meta(row, meta, now)
         if new != row:
             db.put_live(st.conn, new)
             changed = True
@@ -141,7 +144,6 @@ async def appmeta_loop(st):
     """앱 세션 메타데이터로 '결정 필요'·'열어 봄'·제목을 보강한다. 설정으로 끌 수 있다."""
     if not st.cfg.appmeta_enabled:
         return
-    db.ensure_health(st.conn, st.cfg.default_host, "appmeta")
     while True:
         try:
             if apply_appmeta(st, time.time()):

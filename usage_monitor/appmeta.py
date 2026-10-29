@@ -54,6 +54,7 @@ class AppMetaReader:
         self.rescan_sec = rescan_sec
         self.cache = {}
         self.files_seen = 0            # 마지막 폴링에서 읽을 수 있었던 파일 수(수집 상태 표시용)
+        self.files_found = 0           # 마지막 폴링에서 찾은 파일 수(읽을 수 없는 것 포함)
         self._paths = []
         self._last_scan = None
         self._signatures = {}          # 경로 → (mtime_ns, 크기). 제대로 읽은 파일만 기억한다
@@ -103,6 +104,7 @@ class AppMetaReader:
                     self.cache[meta["cli_session_id"]] = meta
                     changed = True
         self.files_seen = readable
+        self.files_found = len(self._paths)
         return changed
 
     def _drop(self, path):

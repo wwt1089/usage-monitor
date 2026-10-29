@@ -73,8 +73,8 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(snap["today"]["cost_micros_est"], 400000)
         self.assertEqual(sum(snap["burn"]["series"]["output"]), 600)
         self.assertEqual(snap["mode"], "active")
-        # appmeta는 앱 정보를 못 읽어도 "읽지 못함"을 보이려고 늘 행이 있다(스펙 §7)
-        self.assertEqual({h["source"] for h in snap["health"]}, {"otel", "appmeta"})
+        # 앱 메타데이터 파일이 없으면(CLI 전용) 앱 정보 줄은 만들지 않는다
+        self.assertEqual({h["source"] for h in snap["health"]}, {"otel"})
 
     def test_sse_pushes_spool_change_and_resumes_after_restart(self):
         now = int(time.time())
@@ -176,7 +176,10 @@ class ServerTest(unittest.TestCase):
             self.assertIn('id="live-table"', body)
 
     def test_appmeta_health_shown_when_nothing_readable(self):
-        with Receiver(self.home) as r:                         # 기본: 없는 폴더
+        meta_dir = self.home / "meta"
+        meta_dir.mkdir(parents=True)
+        (meta_dir / "local_1.json").write_text('{"title": "세션 ID 없는 바뀐 형식"}', encoding="utf-8")
+        with Receiver(self.home, appmeta_glob=str(meta_dir / "local_*.json")) as r:
             for _ in range(30):
                 rows = {h["source"]: h for h in r.get_json("/api/snapshot")["health"]}
                 if "appmeta" in rows:

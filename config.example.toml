@@ -9,3 +9,5 @@ port = 4318                 # OTEL_EXPORTER_OTLP_LOGS_ENDPOINT 와 맞춘다
 auth_token = ""             # 비우면 인증 없음. 넣으면 POST /v1/logs 가 Authorization: Bearer <토큰> 을 검사
 retention_days = 90
 obs_cost_usd = 2.0          # 마지막 한도 관측 뒤의 추정 비용(USD)이 이 값을 넘으면 간격을 기다리지 않고 관측한다. 0이면 끔
+appmeta_enabled = true      # Desktop 앱 세션 메타데이터로 '결정 필요'·'열어 봄'·제목을 보강한다. 앱 형식이 바뀌어 문제가 되면 false
+appmeta_glob = ""           # 앱 메타데이터 파일 패턴. 비우면 %LOCALAPPDATA%\Claude-Data\*\claude-code-sessions\*\*\local_*.json

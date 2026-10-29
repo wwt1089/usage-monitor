@@ -112,7 +112,7 @@ class LiveSnapshotTest(unittest.TestCase):
     def put(self, sid, state, ago, seen, archived=0, title=None):
         t = self.now - ago
         db.put_live(self.conn, {"session_id": sid, "app_session_id": None, "host": "PC1", "title": title,
-                                "cwd": "C:\PDD\\" + sid, "state": state, "detail": None, "state_ts": t,
+                                "cwd": "C:\\PDD\\" + sid, "state": state, "detail": None, "state_ts": t,
                                 "last_event_ts": t, "stop_ts": None, "seen": seen, "archived": archived})
 
     def test_live_snapshot_filters_sorts_counts(self):
@@ -141,3 +141,15 @@ class LiveSnapshotTest(unittest.TestCase):
 
     def test_build_snapshot_has_live(self):
         self.assertIn("live", metrics.build_snapshot(self.conn, self.now))
+
+
+class HealthReviewTest(unittest.TestCase):
+    """원작자 리뷰: 앱 정보(appmeta) 갱신이 OTel을 '수집 끊김 의심'으로 만들지 않게."""
+
+    def test_appmeta_does_not_mark_otel_missing(self):
+        conn = db.connect(Path(tempfile.mkdtemp()) / "t.db")
+        now = 1_800_000_000
+        db.touch_health(conn, "PC1", "otel", now - 600)          # 10분 전 마지막 요청(유휴)
+        db.touch_health(conn, "PC1", "appmeta", now - 1)         # 앱 정보는 2초마다 갱신된다
+        st = {r["source"]: r["status"] for r in metrics.health(conn, now)}
+        self.assertEqual(st["otel"], "idle")

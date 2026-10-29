@@ -120,7 +120,9 @@ def health(conn, now):
     """수집 상태. statusline·get_usage: 2분 live / 30분 recent / 그 이상 idle.
     otel: 같은 host의 다른 소스가 2분 안에 들어왔는데 otel이 2분 넘게 없으면 missing."""
     rows = [dict(r) for r in conn.execute("SELECT * FROM source_health ORDER BY host, source")]
-    active_hosts = {r["host"] for r in rows if r["source"] != "otel" and now - r["last_seen"] < 120}
+    # Claude를 쓰고 있는지는 statusline·get_usage로만 본다. appmeta는 앱 파일만 있으면 2초마다 갱신된다
+    active_hosts = {r["host"] for r in rows
+                    if r["source"] not in ("otel", "appmeta") and now - r["last_seen"] < 120}
     for r in rows:
         age = now - r["last_seen"]
         if age < 120:

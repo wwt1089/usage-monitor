@@ -182,3 +182,21 @@ class NewTurnTest(unittest.TestCase):
     def test_late_stop_of_previous_turn_ignored(self):
         row = run(ev("UserPromptSubmit", 100), ev("UserPromptSubmit", 200), ev("Stop", 150))
         self.assertEqual((row["state"], row["state_ts"]), ("working", 200))
+
+
+class DecisionReviewTest(unittest.TestCase):
+    """원작자 리뷰: 결정 필요로 바뀌면 다시 '확인 안 함', 이전 턴 요약이 새 턴을 결정 필요로 만들지 않게."""
+
+    def done_seen(self):
+        return dict(run(ev("UserPromptSubmit", 90), ev("Stop", 100)), seen=1)
+
+    def test_decision_resets_seen_and_uses_now(self):
+        row = ss.apply_meta(self.done_seen(), meta(summary_fresh=True, status_category="blocked",
+                                                   last_turn_edge_ms=99_900, last_focused_ms=100_500), now=105)
+        self.assertEqual((row["state"], row["seen"], row["state_ts"]), ("decision", 0, 105))
+
+    def test_previous_turn_summary_ignored(self):
+        # 이전 턴 경계(96초)가 새 턴의 Stop(100초)보다 2초 넘게 앞서면 그 요약은 이번 턴 것이 아니다
+        row = ss.apply_meta(self.done_seen(), meta(summary_fresh=True, status_category="blocked",
+                                                   last_turn_edge_ms=96_000), now=105)
+        self.assertEqual(row["state"], "done")

@@ -16,7 +16,7 @@ ATTENTION = frozenset({"waiting", "decision", "done", "error"})   # 바뀌면 "�
 VISIBLE_SEC = 7200          # 확인한 세션을 목록에 남겨 두는 시간
 STALE_SEC = 1800            # 작업 중인데 이벤트가 이만큼 없으면 회색으로 표시
 DETAIL_MAX = 80
-EDGE_TOLERANCE_SEC = 5      # 메타데이터 턴 경계와 Stop 시각의 허용 오차
+EDGE_TOLERANCE_SEC = 2      # 메타데이터 턴 경계와 Stop 시각의 허용 오차(실측 0.2초). 넓으면 이전 턴 요약을 새 턴으로 착각한다
 
 
 def _cut(text):
@@ -108,8 +108,8 @@ def apply_event(row, ev):
     return row
 
 
-def apply_meta(row, meta):
-    """앱 메타데이터로 보강한 새 행을 돌려준다."""
+def apply_meta(row, meta, now=None):
+    """앱 메타데이터로 보강한 새 행을 돌려준다. now는 '결정 필요'로 바뀐 시각(없으면 Stop 시각)."""
     row = dict(row)
 
     # 1단계: 앱 쪽 식별자·제목·보관 여부
@@ -124,6 +124,9 @@ def apply_meta(row, meta):
             and (meta.get("last_turn_edge_ms") or 0) / 1000 >= row["stop_ts"] - EDGE_TOLERANCE_SEC):
         row["state"] = "decision"
         row["detail"] = _cut(meta.get("needs_action"))
+        # 완료를 먼저 봤더라도 할 일이 새로 생긴 것이므로 다시 '확인 안 함'으로. 그 뒤에 열어 봐야 확인함
+        row["seen"] = 0
+        row["state_ts"] = now if now is not None else row["state_ts"]
 
     # 3단계: 상태가 바뀐 뒤에 앱에서 그 세션을 열었으면 확인한 것으로 본다
     if row["seen"] == 0 and (meta.get("last_focused_ms") or 0) / 1000 > row["state_ts"]:
