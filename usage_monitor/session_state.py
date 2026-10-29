@@ -60,7 +60,19 @@ def _transition(row, ev):
 
 
 def apply_event(row, ev):
-    """스풀 한 줄을 반영한 새 행을 돌려준다."""
+    """스풀 한 줄을 반영한 새 행을 돌려준다. SessionStart만 온 새 세션이면 None(목록에 올리지 않음)."""
+    # 0단계: SessionStart는 앱이 세션을 복원할 때마다 온다. 제목·폴더만 갱신하고 활동 시각은 건드리지 않는다
+    #        (그러지 않으면 어제 끝난 세션이 앱 재시작 때마다 목록에 다시 나타난다)
+    if ev.get("event") == "SessionStart":
+        if not row:
+            return None
+        row = dict(row)
+        if ev.get("title") and not row.get("app_session_id"):
+            row["title"] = ev["title"]
+        for key in ("cwd", "host"):
+            if ev.get(key):
+                row[key] = ev[key]
+        return row
     # 1단계: 행이 없으면 새로 만들고, 있으면 복사본에서 작업한다
     row = dict(row) if row else _new_row(ev)
 

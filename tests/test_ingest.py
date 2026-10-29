@@ -244,3 +244,13 @@ class BadLineTest(unittest.TestCase):
         with self.assertLogs("usage_monitor.spool", level="WARNING"):
             spool.SpoolTailer(conn, path, spool.ingest_statusline, "D").poll()
         self.assertEqual(db.get_offset(conn, path)[1], path.stat().st_size)
+
+
+class SessionStartTest(unittest.TestCase):
+    def test_session_start_only_creates_no_live_row(self):
+        tmp = Path(tempfile.mkdtemp())
+        conn = db.connect(tmp / "t.db")
+        path = tmp / "session_events.jsonl"
+        path.write_text(json.dumps({"ts": 10, "event": "SessionStart", "session_id": "s1"}) + "\n", encoding="utf-8")
+        spool.SpoolTailer(conn, path, spool.ingest_session_event, "D").poll()
+        self.assertEqual(db.list_live(conn), [])

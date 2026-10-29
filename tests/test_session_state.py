@@ -29,11 +29,15 @@ def meta(**kw):
 
 
 class ApplyEventTest(unittest.TestCase):
-    def test_new_session_from_session_start_is_quiet(self):
-        row = run(ev("SessionStart", 10, title="물류B02"))
-        self.assertEqual(row["state"], "done")
-        self.assertEqual(row["seen"], 1)
-        self.assertEqual(row["title"], "물류B02")
+    def test_session_start_alone_makes_no_row(self):
+        # 앱이 세션을 복원할 때(resume)마다 오므로, 이것만으로는 목록에 올리지 않는다
+        self.assertIsNone(ss.apply_event(None, ev("SessionStart", 10, title="물류B02")))
+
+    def test_session_start_does_not_revive_old_session(self):
+        row = run(ev("UserPromptSubmit", 10), ev("Stop", 20))
+        row = dict(row, seen=1)
+        row = ss.apply_event(row, ev("SessionStart", 5000, title="새 제목"))
+        self.assertEqual((row["last_event_ts"], row["state_ts"], row["title"]), (20, 20, "새 제목"))
 
     def test_permission_then_tool_resumes_then_stop(self):
         row = run(ev("UserPromptSubmit", 10), ev("Notification", 20, ntype="permission_prompt", message="Claude needs your permission to use Bash"))

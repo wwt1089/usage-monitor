@@ -135,7 +135,9 @@ def ingest_session_event(conn, rec, default_host):
             ev[key] = str(ev[key])
     ev["host"] = ev.get("host") or default_host
     # 3단계: 지금 행에 이벤트를 적용해 다시 쓴다
-    db.put_live(conn, session_state.apply_event(db.get_live(conn, ev["session_id"]), ev))
+    row = session_state.apply_event(db.get_live(conn, ev["session_id"]), ev)
+    if row is not None:                    # SessionStart만 온 새 세션은 올리지 않는다
+        db.put_live(conn, row)
 
 
 def truncate_if_consumed(conn, path, max_bytes=5_000_000):
