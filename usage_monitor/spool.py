@@ -140,10 +140,16 @@ def ingest_session_event(conn, rec, default_host):
         db.put_live(conn, row)
 
 
-def truncate_if_consumed(conn, path, max_bytes=5_000_000):
-    """다 읽은 스풀이 max_bytes를 넘으면 비운다. 비웠으면 True.
+def rotate_if_consumed(conn, path, handler, default_host, max_bytes=5_000_000, _before_replace=None):
+    """다 읽은 스풀이 max_bytes를 넘으면 정리한다. 정리했으면 True.
 
-    tailer는 '크기 < 저장된 오프셋'이면 처음부터 읽으므로, 오프셋도 0으로 맞춰 둔다."""
+    제자리에서 비우면(truncate) 확인과 비우기 사이에 hook이 쓴 줄을 잃는다. 그래서
+      1) 이름을 .old로 바꿔 떼어 내고(이후 hook은 새 파일을 만든다)
+      2) 떼어 낸 파일에서 저장된 오프셋 뒤에 남은 줄까지 마저 반영한 뒤
+      3) 지운다. 새 파일은 파일 번호가 달라 tailer가 처음부터 읽는다
+    Windows에서 hook이 그 순간 파일을 쥐고 있으면 이름 바꾸기가 실패하니, 그때는 다음 기회로 미룬다.
+    _before_replace는 시험용(확인과 떼어 내기 사이에 줄이 덧붙는 순간을 재현)."""
+    # 1단계: 다 읽었고 충분히 큰지
     try:
         st = path.stat()
     except OSError:
@@ -151,6 +157,22 @@ def truncate_if_consumed(conn, path, max_bytes=5_000_000):
     saved_id, offset = db.get_offset(conn, path)
     if st.st_size <= max_bytes or offset != st.st_size or saved_id != str(st.st_ino):
         return False
-    os.truncate(path, 0)
-    db.set_offset(conn, path, saved_id, 0)
+    if _before_replace:
+        _before_replace()
+    # 2단계: 떼어 낸다
+    old = path.with_name(path.name + ".old")
+    try:
+        os.replace(path, old)
+    except OSError as e:
+        log.info("스풀 정리 미룸 %s: %s", path.name, e)
+        return False
+    # 3단계: 떼어 낸 파일에 남은 줄(확인 뒤 덧붙은 줄)을 같은 오프셋부터 마저 읽는다
+    db.set_offset(conn, old, saved_id, offset)
+    SpoolTailer(conn, old, handler, default_host).poll()
+    # 4단계: 지우고 기록을 정리한다
+    try:
+        old.unlink()
+    except OSError as e:
+        log.warning("떼어 낸 스풀을 지우지 못함 %s: %s", old.name, e)
+    conn.execute("DELETE FROM spool_offsets WHERE path IN (?, ?)", (str(old), str(path)))
     return True

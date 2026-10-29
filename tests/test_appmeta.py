@@ -157,3 +157,12 @@ class RobustMetaTest(unittest.TestCase):
         p1.unlink()
         self.assertTrue(r.poll(101))
         self.assertNotIn("s1", r.cache)
+
+
+class WithTokenTest(unittest.TestCase):
+    """후속 리뷰: 화면·트레이가 수신기를 부를 때 토큰을 붙인다(설정했을 때만)."""
+
+    def test_with_token(self):
+        self.assertEqual(config.with_token("http://h/full", ""), "http://h/full")
+        self.assertEqual(config.with_token("http://h/full", "a b&c"), "http://h/full?token=a+b%26c")
+        self.assertEqual(config.with_token("http://h/web/widget.html?size=l", "t"), "http://h/web/widget.html?size=l&token=t")

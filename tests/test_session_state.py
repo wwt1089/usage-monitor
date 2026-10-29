@@ -57,7 +57,8 @@ class ApplyEventTest(unittest.TestCase):
         self.assertEqual(row["state"], "working")
 
     def test_post_tool_does_not_wake_done(self):
-        row = run(ev("UserPromptSubmit", 10), ev("Stop", 40), ev("PostToolUse", 41))
+        # Stop 직후(0.5초 안)의 도구 이벤트는 늦은 기록으로 보고 완료를 유지한다. 그 뒤는 StopGuardTest
+        row = run(ev("UserPromptSubmit", 10), ev("Stop", 40), ev("PostToolUse", 40.2))
         self.assertEqual(row["state"], "done")
 
     def test_out_of_order_event_updates_title_only(self):
@@ -199,4 +200,17 @@ class DecisionReviewTest(unittest.TestCase):
         # 이전 턴 경계(96초)가 새 턴의 Stop(100초)보다 2초 넘게 앞서면 그 요약은 이번 턴 것이 아니다
         row = ss.apply_meta(self.done_seen(), meta(summary_fresh=True, status_category="blocked",
                                                    last_turn_edge_ms=96_000), now=105)
+        self.assertEqual(row["state"], "done")
+
+
+class StopGuardTest(unittest.TestCase):
+    """후속 리뷰: Stop hook이 종료를 막아(decision: block) 턴이 이어지면 다시 작업 중으로."""
+
+    def test_tool_after_stop_revives_working(self):
+        row = run(ev("UserPromptSubmit", 10), ev("Stop", 20), ev("PostToolUse", 25, tool="mcp__ccd_session_mgmt__get_usage"))
+        self.assertEqual((row["state"], row["state_ts"]), ("working", 25))
+
+    def test_tool_event_just_after_stop_is_jitter(self):
+        # Stop 직후 0.5초 안의 도구 이벤트는 마지막 도구의 늦은 기록일 수 있어 완료를 유지한다
+        row = run(ev("UserPromptSubmit", 10), ev("Stop", 20), ev("PostToolUse", 20.3))
         self.assertEqual(row["state"], "done")

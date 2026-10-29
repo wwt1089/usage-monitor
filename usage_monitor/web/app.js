@@ -14,6 +14,9 @@ const SHIFT_EVERY_MS = 5 * 60 * 1000;
 const SHIFTS = [[0, 0], [1, 0], [2, 1], [1, 2], [0, 1], [2, 2], [1, 1], [0, 2], [2, 0]];
 
 let snap = null;
+// 수신기에 auth_token을 설정했으면 화면 주소의 ?token= 을 SSE·확인 요청에도 붙인다(EventSource는 헤더를 못 붙인다)
+const TOKEN = new URLSearchParams(location.search).get('token');
+const TOKEN_QUERY = TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '';
 let lastMessageAt = 0;
 let lastHeartbeatAt = Date.now();
 
@@ -255,7 +258,7 @@ const sessionLink = appId => (appId && APP_SESSION_RE.test(appId) ? `claude://co
 
 async function markSeen(id, appId, openApp = true) {
   // 1단계: 확인함으로 표시한다(실패해도 다음 스냅샷에서 다시 보인다)
-  try { await fetch('/api/sessions/' + encodeURIComponent(id) + '/seen', { method: 'POST' }); } catch (e) { /* 무시 */ }
+  try { await fetch('/api/sessions/' + encodeURIComponent(id) + '/seen' + TOKEN_QUERY, { method: 'POST' }); } catch (e) { /* 무시 */ }
   // 2단계: 위젯 창 안이면 Claude 앱의 그 세션으로 이동한다(세션을 모르면 앱만 띄움)
   const api = window.pywebview && window.pywebview.api;
   if (openApp && api && api.open_app) api.open_app(appId || null);
@@ -321,7 +324,7 @@ function render() {
 }
 
 function connect() {
-  const es = new EventSource('/stream');
+  const es = new EventSource('/stream' + TOKEN_QUERY);
   es.addEventListener('snapshot', e => {
     snap = JSON.parse(e.data);
     lastMessageAt = lastHeartbeatAt = Date.now();

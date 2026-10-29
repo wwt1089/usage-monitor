@@ -113,8 +113,11 @@ class ServerTest(unittest.TestCase):
             r.post("/v1/logs", fx.payload([fx.api_request("req_A", now * 1000), fx.api_request("req_B", now * 1000)]))
             rec = {}
             for _ in range(60):
-                if path.exists() and (rec := json.loads(path.read_text(encoding="utf-8")))["requests"] == 2:
-                    break
+                try:
+                    if path.exists() and (rec := json.loads(path.read_text(encoding="utf-8")))["requests"] == 2:
+                        break
+                except (OSError, ValueError):
+                    pass                                           # 수신기가 파일을 바꾸는 순간(Windows)엔 다시 읽는다
                 time.sleep(0.05)
         self.assertEqual(rec, {"obs_ts": now - 5, "cost_usd": 0.4, "requests": 2, "threshold_usd": 0.3})
 
@@ -192,6 +195,32 @@ class ServerTest(unittest.TestCase):
             body = urllib.request.urlopen(r.url("/full"), timeout=5).read().decode("utf-8")
             self.assertIn('id="live-table"', body)
             self.assertIn('id="lim-5h"', body)
+
+    def test_read_endpoints_require_token_when_configured(self):
+        """후속 리뷰: 토큰을 설정하면 조회(스냅샷·SSE·화면)에도 토큰이 필요하다. 헤더나 ?token= 둘 다 받는다."""
+        def status(url, headers=None):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=5) as resp:
+                    if "/stream" in url:
+                        resp.readline()
+                    return resp.status
+            except urllib.error.HTTPError as e:
+                return e.code
+        with Receiver(self.home, auth_token="secret") as r:
+            for path in ("/api/snapshot", "/stream", "/sessions", "/full", "/"):
+                self.assertEqual(status(r.url(path)), 401, path)
+                self.assertEqual(status(r.url(path + "?token=secret")), 200, path)
+            self.assertEqual(status(r.url("/api/snapshot"), {"Authorization": "Bearer secret"}), 200)
+            self.assertEqual(status(r.url("/web/app.js")), 200)                # 데이터 없는 화면 파일은 그대로
+            req = urllib.request.Request(r.url("/api/sessions/nope/seen?token=secret"), data=b"{}", method="POST")
+            self.assertEqual(status(req.full_url) if False else self._post_status(req), 404)   # 토큰은 통과, 세션은 없음
+
+    @staticmethod
+    def _post_status(req):
+        try:
+            return urllib.request.urlopen(req, timeout=5).status
+        except urllib.error.HTTPError as e:
+            return e.code
 
     @staticmethod
     def read_event(resp):

@@ -21,11 +21,12 @@ from pathlib import Path
 
 import webview
 
-from . import kiosk
+from . import config, kiosk
 
 HOME = Path(os.environ.get("USAGE_MONITOR_HOME") or Path.home() / ".claude" / "usage-monitor")
 STATE_PATH = HOME / "state" / "widget.json"
 BASE = os.environ.get("USAGE_MONITOR_URL", "http://127.0.0.1:4318").rstrip("/")
+TOKEN = ""                                # 수신기 auth_token. 트레이가 넣어 준다(페이지는 ?token= 으로 받아 쓴다)
 TITLE = "Usage Monitor"
 DEFAULTS = {"size": "m", "w": 300, "h": 192, "x": None, "y": None, "visible": True,
             "opacity": 100, "scale": 1.0}   # w·h는 CSS 픽셀(배율 포함), x·y는 화면 픽셀, opacity는 불투명도 %, scale은 크기 배율
@@ -255,11 +256,11 @@ def run(window, api, state):
 
     while True:
         try:
-            urllib.request.urlopen(BASE + "/api/snapshot", timeout=3).close()
+            urllib.request.urlopen(config.with_token(BASE + "/api/snapshot", TOKEN), timeout=3).close()
             break
         except OSError:
             time.sleep(3)
-    window.load_url(f"{BASE}/web/widget.html?size={state['size']}")
+    window.load_url(config.with_token(f"{BASE}/web/widget.html?size={state['size']}", TOKEN))
 
 
 def create(state, on_close=None):

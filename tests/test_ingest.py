@@ -181,19 +181,19 @@ class SessionSpoolTest(unittest.TestCase):
             f.write((json.dumps(self.ev("Stop", 11)) + "\n") * 90000)       # 약 5.7MB
         self.poll()
         self.assertGreater(self.path.stat().st_size, 5_000_000)
-        self.assertTrue(spool.truncate_if_consumed(self.conn, self.path))
-        self.assertEqual(self.path.stat().st_size, 0)
+        self.assertTrue(spool.rotate_if_consumed(self.conn, self.path, spool.ingest_session_event, "D"))
+        self.assertFalse(self.path.exists())                                  # 떼어 내고 지웠다
         self.put(self.ev("Notification", 20, ntype="permission_prompt", message="Claude needs your permission to use Edit"))
-        self.assertEqual(self.poll(), 1)                                      # 비운 뒤 새 줄을 읽는다
+        self.assertEqual(self.poll(), 1)                                      # 정리 뒤 새 파일의 줄을 읽는다
         self.assertEqual(db.get_live(self.conn, "s1")["detail"], "Edit")
 
     def test_truncate_skips_unread_or_small(self):
         self.put(self.ev("Stop", 10))
-        self.assertFalse(spool.truncate_if_consumed(self.conn, self.path))     # 아직 안 읽음
+        self.assertFalse(spool.rotate_if_consumed(self.conn, self.path, spool.ingest_session_event, "D"))     # 아직 안 읽음
         self.poll()
-        self.assertFalse(spool.truncate_if_consumed(self.conn, self.path))     # 작음
+        self.assertFalse(spool.rotate_if_consumed(self.conn, self.path, spool.ingest_session_event, "D"))     # 작음
         self.assertGreater(self.path.stat().st_size, 0)
-        self.assertFalse(spool.truncate_if_consumed(self.conn, self.tmp / "none.jsonl"))
+        self.assertFalse(spool.rotate_if_consumed(self.conn, self.tmp / "none.jsonl", spool.ingest_session_event, "D"))
 
 
 if __name__ == "__main__":
@@ -254,3 +254,34 @@ class SessionStartTest(unittest.TestCase):
         path.write_text(json.dumps({"ts": 10, "event": "SessionStart", "session_id": "s1"}) + "\n", encoding="utf-8")
         spool.SpoolTailer(conn, path, spool.ingest_session_event, "D").poll()
         self.assertEqual(db.list_live(conn), [])
+
+
+class RotateRaceTest(unittest.TestCase):
+    """후속 리뷰: 다 읽은 스풀을 정리하는 순간 hook이 덧붙인 줄도 잃지 않는다."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.conn = db.connect(self.tmp / "t.db")
+        self.path = self.tmp / "session_events.jsonl"
+
+    def line(self, sid, ts):
+        return json.dumps({"ts": ts, "event": "Stop", "session_id": sid}) + "\n"
+
+    def test_line_appended_during_rotation_is_kept(self):
+        self.path.write_text(self.line("a", 1) * 110000, encoding="utf-8")    # 약 6MB
+        tailer = spool.SpoolTailer(self.conn, self.path, spool.ingest_session_event, "D")
+        tailer.poll()
+        # 크기·오프셋을 확인한 뒤, 파일을 떼어 내기 직전에 hook이 줄을 덧붙인 상황
+        race = lambda: open(self.path, "a", encoding="utf-8").write(self.line("late", 2))
+        self.assertTrue(spool.rotate_if_consumed(self.conn, self.path, spool.ingest_session_event, "D",
+                                                 _before_replace=race))
+        self.assertIsNotNone(db.get_live(self.conn, "late"))                  # 덧붙은 줄도 반영됐다
+        self.assertFalse(self.path.with_name(self.path.name + ".old").exists())
+        # 정리 뒤 새로 쓰인 줄은 새 파일에서 처음부터 읽는다
+        self.path.write_text(self.line("new", 3), encoding="utf-8")
+        self.assertEqual(tailer.poll(), 1)
+        self.assertIsNotNone(db.get_live(self.conn, "new"))
+
+    def test_skip_when_not_consumed_or_small(self):
+        self.path.write_text(self.line("a", 1), encoding="utf-8")
+        self.assertFalse(spool.rotate_if_consumed(self.conn, self.path, spool.ingest_session_event, "D"))

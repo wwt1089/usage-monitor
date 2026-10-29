@@ -36,9 +36,9 @@ TOOLTIP_MAX = 127                                                  # Windows 트
 SSE_RETRY_SEC = 3
 
 
-def fetch_snapshot(base):
+def fetch_snapshot(base, token=""):
     try:
-        with urllib.request.urlopen(base + "/api/snapshot", timeout=3) as r:
+        with urllib.request.urlopen(config.with_token(base + "/api/snapshot", token), timeout=3) as r:
             return json.load(r)
     except (OSError, ValueError):
         return None
@@ -105,7 +105,7 @@ class Receiver:
         self.server, self.stopping = None, False
 
     def start(self):
-        if fetch_snapshot(self.base):
+        if fetch_snapshot(self.base, self.cfg.auth_token):
             log.info("이미 떠 있는 수신기를 씁니다 %s", self.base)
             return
         threading.Thread(target=self._serve, name="receiver", daemon=True).start()
@@ -144,6 +144,10 @@ class App:
         self.last_pct = None
         self.tracker = alerts.AlertTracker()
 
+    def url(self, path):
+        """수신기 주소. auth_token을 설정했으면 ?token= 을 붙인다."""
+        return config.with_token(self.base + path, self.cfg.auth_token)
+
     def _load_settings(self):
         try:
             return json.loads(self.settings_path.read_text(encoding="utf-8"))
@@ -171,22 +175,22 @@ class App:
         return action
 
     def open_dashboard(self, *_):
-        webbrowser.open(self.base + "/")
+        webbrowser.open(self.url("/"))
 
     def open_full(self, *_):
-        ok, msg = kiosk.open_full(self.base + "/full")
+        ok, msg = kiosk.open_full(self.url("/full"))
         if not ok:
             self.notify(msg)
 
     def open_sessions(self, *_):
-        webbrowser.open(self.base + "/sessions")
+        webbrowser.open(self.url("/sessions"))
 
     def toggle_auto_show(self, *_):
         self.settings["auto_show_widget"] = not self.settings["auto_show_widget"]
         self._save_settings()
 
     def open_kiosk(self, *_):
-        ok, msg = kiosk.open_kiosk(self.base + "/")
+        ok, msg = kiosk.open_kiosk(self.url("/"))
         if not ok:
             self.notify(msg)
 
@@ -261,7 +265,7 @@ class App:
     def refresh_loop(self):
         kiosk_pending = self.settings["kiosk_on_start"]
         while not self.quitting:
-            snap = fetch_snapshot(self.base)
+            snap = fetch_snapshot(self.base, self.cfg.auth_token)
             self.last_pct = pct_from_snapshot(snap)
             if snap and self.last_live is None:    # 세션 목록은 SSE가 최신이다. 늦게 끝난 조회가 덮지 않게 처음만
                 self.last_live = snap.get("live")
@@ -286,7 +290,7 @@ class App:
         """수신기 SSE를 구독한다. 스냅샷마다 배지를 바꾸고, 새 대기가 생기면 숨긴 위젯을 띄운다."""
         while not self.quitting:
             try:
-                with urllib.request.urlopen(self.base + "/stream", timeout=60) as resp:
+                with urllib.request.urlopen(self.url("/stream"), timeout=60) as resp:
                     lines = (raw.decode("utf-8", "replace") for raw in resp)
                     for event, data in alerts.parse_sse(lines):
                         if self.quitting:
@@ -317,6 +321,7 @@ class App:
     def run(self):
         self.receiver.start()
         widget_host.BASE = self.base
+        widget_host.TOKEN = self.cfg.auth_token
         self.window, self.api = widget_host.create(
             self.widget_state, on_close=lambda: widget_host.set_visible(self.api, self.widget_state, False))
         self.icon = self.build_icon()

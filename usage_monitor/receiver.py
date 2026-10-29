@@ -174,7 +174,8 @@ async def purge_loop(st):
         try:
             rollup.rollup(st.conn)                # 지우기 전에 집계를 맞춘다
             db.purge_old(st.conn, st.cfg.retention_days)
-            spool.truncate_if_consumed(st.conn, st.cfg.spool_dir / "session_events.jsonl")
+            spool.rotate_if_consumed(st.conn, st.cfg.spool_dir / "session_events.jsonl",
+                                     spool.ingest_session_event, st.cfg.default_host)
         except Exception:
             log.exception("보관 기간 정리 실패")
         await asyncio.sleep(PURGE_EVERY_SEC)
@@ -197,6 +198,17 @@ def create_app(cfg=None):
             st.conn.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    def require_token(request):
+        """auth_token을 설정했으면 헤더(Authorization: Bearer) 또는 주소의 ?token= 이 맞아야 한다.
+        브라우저 화면·SSE(EventSource)는 헤더를 못 붙이므로 ?token= 도 받는다. 토큰이 없으면 그대로 통과."""
+        if not cfg.auth_token:
+            return
+        if request.headers.get("authorization") == f"Bearer {cfg.auth_token}":
+            return
+        if request.query_params.get("token") == cfg.auth_token:
+            return
+        raise HTTPException(401)
 
     @app.post("/v1/logs")
     async def receive_logs(request: Request):
@@ -246,8 +258,7 @@ def create_app(cfg=None):
     @app.post("/api/sessions/{session_id}/seen")
     async def mark_seen(session_id: str, request: Request):
         """위젯·대시보드에서 세션을 눌렀을 때. 확인함으로 표시한다."""
-        if cfg.auth_token and request.headers.get("authorization") != f"Bearer {cfg.auth_token}":
-            raise HTTPException(401)
+        require_token(request)
         st = request.app.state.st
         if not db.mark_seen(st.conn, session_id):
             raise HTTPException(404)
@@ -256,10 +267,12 @@ def create_app(cfg=None):
 
     @app.get("/api/snapshot")
     async def snapshot(request: Request):
+        require_token(request)
         return request.app.state.st.snapshot()
 
     @app.get("/stream")
     async def stream(request: Request):
+        require_token(request)
         st = request.app.state.st
         first = f"event: snapshot\ndata: {json.dumps(st.snapshot(), ensure_ascii=False, separators=(',', ':'))}\n\n"
         return StreamingResponse(
@@ -268,17 +281,20 @@ def create_app(cfg=None):
         )
 
     @app.get("/full")
-    async def full_page():
+    async def full_page(request: Request):
+        require_token(request)
         """일반 모니터 전체화면 대시보드(한도·토큰 + 세션 상태 표)."""
         return FileResponse(WEB_DIR / "full.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/sessions")
-    async def sessions_page():
+    async def sessions_page(request: Request):
+        require_token(request)
         """브라우저용 세션 상태 표. 키오스크 화면(/)은 1920×480 고정이라 따로 둔다."""
         return FileResponse(WEB_DIR / "sessions.html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/")
-    async def index():
+    async def index(request: Request):
+        require_token(request)
         return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
     if WEB_DIR.exists():

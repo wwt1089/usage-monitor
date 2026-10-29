@@ -68,3 +68,11 @@ def load(path=None):
     if "obs_cost_usd" in values:
         values["obs_cost_usd"] = float(values["obs_cost_usd"])
     return Config(**{k: v for k, v in values.items() if k in Config.__dataclass_fields__})
+
+
+def with_token(url, token):
+    """auth_token을 설정했으면 주소에 ?token= 을 붙인다(브라우저 화면·SSE는 헤더를 못 붙이므로). 없으면 그대로."""
+    if not token:
+        return url
+    from urllib.parse import urlencode
+    return url + ("&" if "?" in url else "?") + urlencode({"token": token})

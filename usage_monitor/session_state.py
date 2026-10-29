@@ -16,6 +16,7 @@ ATTENTION = frozenset({"waiting", "decision", "done", "error"})   # 바뀌면 "�
 VISIBLE_SEC = 7200          # 확인한 세션을 목록에 남겨 두는 시간
 STALE_SEC = 1800            # 작업 중인데 이벤트가 이만큼 없으면 회색으로 표시
 DETAIL_MAX = 80
+STOP_JITTER_SEC = 0.5      # Stop 직후 도구 이벤트를 '이어진 턴'으로 보지 않는 여유
 EDGE_TOLERANCE_SEC = 2      # 메타데이터 턴 경계와 Stop 시각의 허용 오차(실측 0.2초). 넓으면 이전 턴 요약을 새 턴으로 착각한다
 
 
@@ -51,6 +52,11 @@ def _transition(row, ev):
     if kind == "Notification" and ev.get("ntype") in WAITING_NTYPES:
         return "waiting", _notification_detail(ev.get("message")), False
     if kind in ("PostToolUse", "PostToolUseFailure") and row["state"] == "waiting":
+        return "working", None, False
+    # Stop 뒤에 도구가 또 돌면 턴이 이어진 것이다(Stop hook이 decision: block으로 종료를 막은 경우).
+    # Stop 직후 0.5초 안의 도구 이벤트는 마지막 도구의 늦은 기록일 수 있어 무시한다
+    if (kind in ("PostToolUse", "PostToolUseFailure") and row["state"] in ("done", "decision")
+            and row.get("stop_ts") and ev["ts"] > row["stop_ts"] + STOP_JITTER_SEC):
         return "working", None, False
     if kind == "Stop":
         return "done", None, True          # 턴이 끝날 때마다 새 완료로 친다
