@@ -83,3 +83,25 @@ class SaveStateTest(unittest.TestCase):
             self.assertEqual([p.name for p in widget_host.STATE_PATH.parent.iterdir()], ["widget.json"])
         finally:
             widget_host.STATE_PATH = old
+
+
+class KeepInsideTest(unittest.TestCase):
+    """위젯이 커져도 화면(작업 영역) 밖으로 나가지 않게 위치를 당긴다(아침 빈 화면 원인)."""
+
+    def test_pulls_up_when_bottom_overflows(self):
+        # 실제 사례: 1080 모니터(작업 영역 아래 1040)에서 y=1004에 높이 768 → 위로 당겨 바닥에 맞춘다
+        self.assertEqual(widget_host.keep_inside(0, 1004, 405, 768, (0, 0, 1920, 1040)), (0, 272))
+
+    def test_unchanged_when_inside(self):
+        self.assertEqual(widget_host.keep_inside(100, 100, 300, 400, (0, 0, 1920, 1040)), (100, 100))
+
+    def test_right_and_left_edges(self):
+        self.assertEqual(widget_host.keep_inside(1800, 10, 300, 400, (0, 0, 1920, 1040)), (1620, 10))
+        self.assertEqual(widget_host.keep_inside(-50, -20, 300, 400, (0, 0, 1920, 1040)), (0, 0))
+
+    def test_other_monitor_coordinates(self):
+        # 왼쪽 모니터(-1920~0)에서도 그 모니터 안에 둔다
+        self.assertEqual(widget_host.keep_inside(-400, 900, 405, 768, (-1920, 0, 0, 1040)), (-405, 272))
+
+    def test_taller_than_screen_keeps_top_visible(self):
+        self.assertEqual(widget_host.keep_inside(0, 500, 300, 2000, (0, 0, 1920, 1040)), (0, 0))

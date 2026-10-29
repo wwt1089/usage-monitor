@@ -21,6 +21,8 @@ from pathlib import Path
 
 import webview
 
+from . import kiosk
+
 HOME = Path(os.environ.get("USAGE_MONITOR_HOME") or Path.home() / ".claude" / "usage-monitor")
 STATE_PATH = HOME / "state" / "widget.json"
 BASE = os.environ.get("USAGE_MONITOR_URL", "http://127.0.0.1:4318").rstrip("/")
@@ -42,6 +44,8 @@ user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
 user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
 user32.MonitorFromPoint.restype = wintypes.HANDLE
+user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+user32.MonitorFromWindow.restype = wintypes.HANDLE      # 64비트 핸들이 잘리지 않게
 user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_ubyte, wintypes.DWORD]
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE = 0x1, 0x2, 0x4, 0x10
 GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW, WS_EX_LAYERED = -20, 0x80, 0x40000, 0x80000
@@ -96,11 +100,33 @@ def window_pos(hwnd):
     return r.left, r.top
 
 
+def keep_inside(x, y, w, h, work):
+    """창(x, y, 폭, 높이)이 작업 영역(왼, 위, 오른, 아래) 밖으로 나가면 안으로 당긴 위치를 돌려준다.
+    화면보다 크면 위·왼쪽을 맞춰 머리 부분이 보이게 한다."""
+    left, top, right, bottom = work
+    x = max(left, min(x, right - w))
+    y = max(top, min(y, bottom - h))
+    return x, y
+
+
 def fit_size(hwnd, w_css, h_css):
-    """창이 놓인 모니터의 배율에 맞춰 크기를 정한다. 150% 모니터에서 300×232는 450×348 픽셀이다."""
+    """창이 놓인 모니터의 배율에 맞춰 크기를 정한다. 150% 모니터에서 300×232는 450×348 픽셀이다.
+    커지면서 화면 아래·옆으로 넘치면 그 모니터의 작업 영역 안으로 옮긴다(넘치면 비어 보인다)."""
+    # 1단계: 크기
     scale = user32.GetDpiForWindow(hwnd) / 96
-    user32.SetWindowPos(hwnd, None, 0, 0, round(w_css * scale), round(h_css * scale),
-                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)
+    w, h = round(w_css * scale), round(h_css * scale)
+    user32.SetWindowPos(hwnd, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)
+    # 2단계: 창이 놓인 모니터의 작업 영역(작업 표시줄 제외) 안으로
+    info = kiosk.MONITORINFO()
+    info.cbSize = ctypes.sizeof(info)
+    monitor = user32.MonitorFromWindow(hwnd, 2)                       # 2 = 가장 가까운 모니터
+    if not monitor or not user32.GetMonitorInfoW(wintypes.HANDLE(monitor), ctypes.byref(info)):
+        return
+    x, y = window_pos(hwnd)
+    work = info.rcWork
+    nx, ny = keep_inside(x, y, w, h, (work.left, work.top, work.right, work.bottom))
+    if (nx, ny) != (x, y):
+        user32.SetWindowPos(hwnd, None, nx, ny, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
 
 
 def default_position(hwnd, w_css, h_css):
