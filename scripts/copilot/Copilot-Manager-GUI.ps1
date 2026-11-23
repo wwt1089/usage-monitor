@@ -43,6 +43,8 @@ if (-not (Test-Path $corePath)) {
 $script:GuiMode      = $true
 $script:GuiWhatIf    = $true
 $script:InactiveRows = @()
+$script:InactiveContext = $null
+$script:UiResults = $null
 #endregion
 
 #region ── 화면 정의 (XAML) ─────────────────────────────────────────
@@ -165,6 +167,7 @@ $script:InactiveRows = @()
                   <DataTrigger Binding="{Binding Status}" Value="사용이력없음"><Setter Property="Background" Value="#FFF3E0"/></DataTrigger>
                   <DataTrigger Binding="{Binding Status}" Value="신규-유예"><Setter Property="Background" Value="#E3F2FD"/></DataTrigger>
                   <DataTrigger Binding="{Binding Status}" Value="제외대상"><Setter Property="Foreground" Value="#999"/></DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="판정 불가"><Setter Property="Foreground" Value="#795548"/></DataTrigger>
                 </Style.Triggers>
               </Style>
             </DataGrid.RowStyle>
@@ -172,7 +175,7 @@ $script:InactiveRows = @()
               <DataGridTemplateColumn Header="회수" Width="50">
                 <DataGridTemplateColumn.CellTemplate>
                   <DataTemplate>
-                    <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <CheckBox IsChecked="{Binding Selected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding Candidate}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                   </DataTemplate>
                 </DataGridTemplateColumn.CellTemplate>
               </DataGridTemplateColumn>
@@ -190,8 +193,8 @@ $script:InactiveRows = @()
             <Button x:Name="btnSelCand" Content="후보 전체 체크"/>
             <Button x:Name="btnSelNone" Content="체크 해제"/>
             <Button x:Name="btnExport" Content="CSV 저장"/>
-            <CheckBox x:Name="chkRemoveGroup" Content="그룹 상속 사용자는 라이선스 그룹에서 제외" VerticalAlignment="Center" Margin="8,0,0,0"/>
-            <Button x:Name="btnRevokeSel" DockPanel.Dock="Right" Content="② 체크한 사용자 권한 회수" Style="{StaticResource Danger}" Margin="0"/>
+            <Button x:Name="btnRemoveGroup" Content="선택 사용자 그룹에서 제외" Style="{StaticResource Danger}"/>
+            <Button x:Name="btnRevokeSel" DockPanel.Dock="Right" Content="② 직접 할당 회수" Style="{StaticResource Danger}" Margin="0"/>
           </DockPanel>
         </Grid>
       </TabItem>
@@ -287,7 +290,13 @@ function Write-Host {
           $ForegroundColor, $BackgroundColor, [switch]$NoNewline)
     Write-UiLog (@($Object) -join ' ')
 }
-$script:LogSink = { param($line, $result) Write-UiLog $line }
+$script:LogSink = {
+    param($line, $result)
+    Write-UiLog $line
+    if ($null -ne $script:UiResults -and $script:UiResults.ContainsKey($result)) {
+        $script:UiResults[$result]++
+    }
+}
 
 function Show-Msg {
     param([string]$Text, [string]$Title = '안내', [string]$Icon = 'Information', [string]$Buttons = 'OK')
@@ -312,7 +321,6 @@ function Sync-Settings {
     }
     $script:InactiveDays    = $d
     $script:Exclude         = @($ui.txtExclude.Text -split '[,;\s]+' | Where-Object { $_ })
-    $script:RemoveFromGroup = [switch]([bool]$ui.chkRemoveGroup.IsChecked)
     $script:Scope           = if ($ui.rbMachine.IsChecked) { 'Machine' } else { 'User' }
     $loc = $ui.txtUsageLoc.Text.Trim().ToUpper()
     if ($loc -notmatch '^[A-Z]{2}$') { throw "사용 위치는 2자리 국가 코드로 입력하세요. (예: KR)" }
@@ -326,23 +334,37 @@ function Update-Account {
 
 # 작업 실행 래퍼: 대기 커서, 입력 잠금, 오류 메시지 처리
 function Invoke-Ui {
-    param([string]$Title, [scriptblock]$Work, [switch]$NeedGraph)
+    param([string]$Title, [scriptblock]$Work, [string]$GraphOperation, [switch]$SummarizeChanges)
     $win.Cursor = [System.Windows.Input.Cursors]::Wait
     $ui.tabs.IsEnabled = $false
+    $ui.btnConnect.IsEnabled = $false
+    $ui.txtSku.IsEnabled = $false
+    $ui.chkWhatIf.IsEnabled = $false
+    if ($SummarizeChanges) { $script:UiResults = @{ OK = 0; FAIL = 0; SKIP = 0; WHATIF = 0 } }
     $ui.txtStatus.Text = "$Title 진행 중..."
     # 상태 문구가 먼저 그려지도록 화면 갱신
     $win.Dispatcher.Invoke([action] {}, [System.Windows.Threading.DispatcherPriority]::Background)
     try {
         Sync-Settings
-        if ($NeedGraph) { Connect-CopilotGraph; Update-Account }
+        if ($GraphOperation) { Connect-CopilotGraph -Operation $GraphOperation; Update-Account }
         & $Work
-        $ui.txtStatus.Text = "$Title 완료 ($(Get-Date -Format 'HH:mm:ss'))"
+        if ($SummarizeChanges) {
+            $result = $script:UiResults
+            $ui.txtStatus.Text = "$Title · 성공 $($result.OK) / 실패 $($result.FAIL) / 건너뜀 $($result.SKIP) / 시뮬레이션 $($result.WHATIF)"
+            Write-UiLog $ui.txtStatus.Text
+        } else {
+            $ui.txtStatus.Text = "$Title 완료 ($(Get-Date -Format 'HH:mm:ss'))"
+        }
     } catch {
         Write-UiLog "오류: $($_.Exception.Message)"
         $ui.txtStatus.Text = "$Title 실패"
         Show-Msg -Text $_.Exception.Message -Title "$Title 실패" -Icon 'Error' | Out-Null
     } finally {
+        $script:UiResults = $null
         $ui.tabs.IsEnabled = $true
+        $ui.btnConnect.IsEnabled = $true
+        $ui.txtSku.IsEnabled = $true
+        $ui.chkWhatIf.IsEnabled = $true
         $win.Cursor = $null
     }
 }
@@ -353,8 +375,8 @@ function Get-UpnsFromText {
 }
 
 function Update-InactiveGrid {
-    $rows = if ($ui.chkOnlyCand.IsChecked) { @($script:InactiveRows | Where-Object Candidate) } else { @($script:InactiveRows) }
-    $ui.gridInactive.ItemsSource = $rows
+    $rows = if ($ui.chkOnlyCand.IsChecked) { $script:InactiveRows | Where-Object Candidate } else { $script:InactiveRows }
+    $ui.gridInactive.ItemsSource = @($rows | Where-Object { $null -ne $_ })
 }
 
 function Test-IsAdmin {
@@ -367,7 +389,7 @@ function Test-IsAdmin {
 $ui.txtSku.Text = $SkuPartNumber
 
 $ui.btnConnect.Add_Click({
-    Invoke-Ui 'Graph 연결' { Connect-CopilotGraph; Update-Account }
+    Invoke-Ui 'Graph 연결' -GraphOperation Status {}
 })
 
 $ui.chkWhatIf.Add_Click({
@@ -385,7 +407,7 @@ $ui.btnOpenFolder.Add_Click({ Start-Process explorer.exe $PSScriptRoot })
 
 #region ── 이벤트: 라이선스 현황 ───────────────────────────────────
 $ui.btnStatus.Add_Click({
-    Invoke-Ui '현황 조회' -NeedGraph {
+    Invoke-Ui '현황 조회' -GraphOperation Status {
         $st = Get-CopilotStatus
         $ui.txtPurchased.Text = $st.Purchased
         $ui.txtAssigned.Text  = $st.Assigned
@@ -395,7 +417,7 @@ $ui.btnStatus.Add_Click({
 })
 
 $ui.btnList.Add_Click({
-    Invoke-Ui '보유자 조회' -NeedGraph {
+    Invoke-Ui '보유자 조회' -GraphOperation List {
         $rows = @(Get-CopilotUsers | Sort-Object UserPrincipalName)
         $ui.gridUsers.ItemsSource = $rows
         $ui.txtUserCount.Text = $rows.Count
@@ -406,17 +428,27 @@ $ui.btnList.Add_Click({
 
 #region ── 이벤트: 미사용자 정리 ───────────────────────────────────
 $ui.btnFind.Add_Click({
-    Invoke-Ui '미사용자 조회' -NeedGraph {
+    $script:InactiveRows = @()
+    $script:InactiveContext = $null
+    Update-InactiveGrid
+    $ui.txtSummary.Text = '조회 결과가 없습니다.'
+    Invoke-Ui '미사용자 조회' -GraphOperation Inactive {
         # 조회 우선: 기본은 아무도 체크하지 않음 → 사람이 확인 후 체크
         $script:InactiveRows = @(Find-InactiveCopilotUsers | ForEach-Object {
             $_ | Add-Member -NotePropertyName Selected -NotePropertyValue $false -PassThru
         })
+        $ctx = Get-MgContext
+        $script:InactiveContext = @{
+            TenantId = $ctx.TenantId
+            Account = $ctx.Account
+            Sku = $SkuPartNumber
+        }
         Update-InactiveGrid
         $cand = @($script:InactiveRows | Where-Object Candidate).Count
         $sum  = ($script:InactiveRows | Group-Object Status | Sort-Object Name |
                  ForEach-Object { "$($_.Name) $($_.Count)" }) -join ' · '
-        $ui.txtSummary.Text = "전체 $($script:InactiveRows.Count)명 → $sum   |   회수 후보 $cand명 (체크 후 ② 실행)"
-        Write-UiLog "미사용자 조회 완료: 기준 $InactiveDays일, 후보 $cand명"
+        $ui.txtSummary.Text = "전체 $($script:InactiveRows.Count)명 → $sum   |   회수 후보 ${cand}명 (체크 후 ② 실행)"
+        Write-UiLog "미사용자 조회 완료: 기준 ${InactiveDays}일, 후보 ${cand}명"
     }
 })
 
@@ -446,27 +478,87 @@ $ui.btnExport.Add_Click({
     }
 })
 
-$ui.btnRevokeSel.Add_Click({
-    $sel = @($script:InactiveRows | Where-Object Selected)
-    if (-not $sel.Count) { Show-Msg '회수할 사용자를 체크하세요.' | Out-Null; return }
+function Get-CurrentInactiveTargets {
+    param([object[]]$Selected)
 
-    $grp    = @($sel | Where-Object AssignedBy -eq 'Group').Count
-    $nonCan = @($sel | Where-Object { -not $_.Candidate }).Count
-    $lines  = @("체크한 $($sel.Count)명의 Copilot 권한을 회수합니다.")
-    if ($grp) {
-        $how = if ($ui.chkRemoveGroup.IsChecked) { '라이선스 그룹에서 제외' } else { '건너뜀 (그룹 제외 옵션 꺼짐)' }
-        $lines += "· 그룹 상속 $grp명 → $how"
+    $ctx = Get-MgContext
+    if (-not $script:InactiveContext -or $script:InactiveContext.Sku -ne $SkuPartNumber -or
+        $script:InactiveContext.TenantId -ne $ctx.TenantId -or $script:InactiveContext.Account -ne $ctx.Account) {
+        throw 'SKU 또는 Graph 연결이 변경됐습니다. 미사용자를 다시 조회하세요.'
     }
-    if ($nonCan) { $lines += "· 주의: 사용중/유예/제외 판정 $nonCan명 포함" }
+    $freshCandidates = @(Find-InactiveCopilotUsers | Where-Object Candidate |
+                        Select-Object -ExpandProperty UserPrincipalName)
+    foreach ($row in $Selected) {
+        if ($row.UserPrincipalName -in $freshCandidates) {
+            $row.UserPrincipalName
+        } else {
+            Write-Log $row.UserPrincipalName 'InactiveReview' 'SKIP' '최신 조회 결과에서 회수 후보가 아님'
+        }
+    }
+}
+
+function Confirm-GroupRemoval {
+    param([object[]]$Plan)
+
+    $dialog = New-Object System.Windows.Window
+    $dialog.Title = '그룹 멤버십 제거 확인'
+    $dialog.Owner = $win
+    $dialog.Width = 760
+    $dialog.Height = 420
+    $dialog.WindowStartupLocation = 'CenterOwner'
+
+    $panel = New-Object System.Windows.Controls.DockPanel
+    $panel.Margin = '12'
+    $dialog.Content = $panel
+    $summary = New-Object System.Windows.Controls.TextBlock
+    $summary.Text = "$($Plan.Count)건의 그룹 멤버십을 제거합니다. 그룹의 다른 라이선스나 접근 권한도 영향을 받을 수 있습니다."
+    $summary.TextWrapping = 'Wrap'
+    [System.Windows.Controls.DockPanel]::SetDock($summary, 'Top')
+    [void]$panel.Children.Add($summary)
+
+    $button = New-Object System.Windows.Controls.Button
+    $button.Content = if ($script:GuiWhatIf) { '시뮬레이션' } else { '그룹에서 제외' }
+    $button.Margin = '0,8,0,0'
+    $button.Add_Click({ $dialog.DialogResult = $true }.GetNewClosure())
+    [System.Windows.Controls.DockPanel]::SetDock($button, 'Bottom')
+    [void]$panel.Children.Add($button)
+
+    $list = New-Object System.Windows.Controls.ListBox
+    $list.ItemsSource = @($Plan | ForEach-Object { "$($_.Upn) ← $($_.GroupName) [$($_.GroupId)]" })
+    [void]$panel.Children.Add($list)
+    return ($dialog.ShowDialog() -eq $true)
+}
+
+$ui.btnRevokeSel.Add_Click({
+    $sel = @($script:InactiveRows | Where-Object { $_.Selected -and $_.Candidate })
+    if (-not $sel.Count) { Show-Msg '회수할 후보를 체크하세요.' | Out-Null; return }
+
     $preview = ($sel | Select-Object -First 10 | ForEach-Object { "   - $($_.UserPrincipalName)" }) -join "`n"
     if ($sel.Count -gt 10) { $preview += "`n   ... 외 $($sel.Count - 10)명" }
-    if (-not (Confirm-Ui (($lines -join "`n") + "`n`n" + $preview))) { return }
-
-    Invoke-Ui '권한 회수' -NeedGraph {
-        Revoke-CopilotLicense -Upns @($sel.UserPrincipalName)
-        if (-not $script:GuiWhatIf) {
-            Write-UiLog '회수 완료. 최신 상태는 ① 조회를 다시 눌러 확인하세요.'
+    if (-not (Confirm-Ui ("$($sel.Count)명의 Copilot 직접 할당분을 회수합니다.`n`n" + $preview))) { return }
+    Invoke-Ui '직접 할당 회수' -GraphOperation Inactive -SummarizeChanges {
+        $targets = @(Get-CurrentInactiveTargets -Selected $sel)
+        if ($targets.Count) {
+            Connect-CopilotGraph -Operation Revoke
+            Update-Account
+            Revoke-CopilotLicense -Upns $targets
         }
+    }
+})
+
+$ui.btnRemoveGroup.Add_Click({
+    $sel = @($script:InactiveRows | Where-Object { $_.Selected -and $_.Candidate -and $_.AssignedBy -in 'Group', 'Mixed' })
+    if (-not $sel.Count) { Show-Msg '그룹에서 제외할 회수 후보를 체크하세요.' | Out-Null; return }
+    Invoke-Ui '그룹 멤버십 제거' -GraphOperation Inactive -SummarizeChanges {
+        $targets = @(Get-CurrentInactiveTargets -Selected $sel)
+        if (-not $targets.Count) { return }
+        Connect-CopilotGraph -Operation GroupRemovalPreview
+        $plan = @(Get-CopilotGroupRemovalPlan -Upns $targets)
+        if (-not $plan.Count) { Show-Msg '제외할 수 있는 그룹을 찾지 못했습니다.' | Out-Null; return }
+        if (-not (Confirm-GroupRemoval -Plan $plan)) { return }
+        Connect-CopilotGraph -Operation GroupRemoval
+        Update-Account
+        Remove-CopilotGroupMembers -Plan $plan
     }
 })
 #endregion
@@ -490,35 +582,35 @@ $ui.btnGrant.Add_Click({
     $upns = Get-UpnsFromText
     if (-not $upns.Count) { Show-Msg '대상 UPN 을 입력하세요.' | Out-Null; return }
     if (-not (Confirm-Ui "$($upns.Count)명에게 Copilot 라이선스를 부여합니다.")) { return }
-    Invoke-Ui '라이선스 부여' -NeedGraph { Grant-CopilotLicense -Upns $upns }
+    Invoke-Ui '라이선스 부여' -GraphOperation Grant -SummarizeChanges { Grant-CopilotLicense -Upns $upns }
 })
 
 $ui.btnRevoke.Add_Click({
     $upns = Get-UpnsFromText
     if (-not $upns.Count) { Show-Msg '대상 UPN 을 입력하세요.' | Out-Null; return }
     if (-not (Confirm-Ui "$($upns.Count)명의 Copilot 라이선스를 회수합니다.")) { return }
-    Invoke-Ui '라이선스 회수' -NeedGraph { Revoke-CopilotLicense -Upns $upns }
+    Invoke-Ui '라이선스 회수' -GraphOperation Revoke -SummarizeChanges { Revoke-CopilotLicense -Upns $upns }
 })
 
 $ui.btnGrantGroup.Add_Click({
     $g = $ui.txtGroup.Text.Trim()
     if (-not $g) { Show-Msg '그룹 이름을 입력하세요.' | Out-Null; return }
     if (-not (Confirm-Ui "그룹 '$g' 에 Copilot 라이선스를 부여합니다.")) { return }
-    Invoke-Ui '그룹 부여' -NeedGraph { Set-CopilotGroupLicense -Name $g }
+    Invoke-Ui '그룹 부여' -GraphOperation GrantGroup -SummarizeChanges { Set-CopilotGroupLicense -Name $g }
 })
 
 $ui.btnRevokeGroup.Add_Click({
     $g = $ui.txtGroup.Text.Trim()
     if (-not $g) { Show-Msg '그룹 이름을 입력하세요.' | Out-Null; return }
-    if (-not (Confirm-Ui "그룹 '$g' 의 Copilot 라이선스를 회수합니다.`n구성원 전원의 Copilot 이 꺼집니다.")) { return }
-    Invoke-Ui '그룹 회수' -NeedGraph { Set-CopilotGroupLicense -Name $g -Remove }
+    if (-not (Confirm-Ui "그룹 '$g' 의 Copilot 라이선스를 회수합니다.`n구성원이 이 그룹에서 상속받은 Copilot 라이선스가 제거됩니다.")) { return }
+    Invoke-Ui '그룹 회수' -GraphOperation RevokeGroup -SummarizeChanges { Set-CopilotGroupLicense -Name $g -Remove }
 })
 #endregion
 
 #region ── 이벤트: Windows Copilot ────────────────────────────────
 $isAdmin = Test-IsAdmin
 $ui.txtAdmin.Text = if ($isAdmin) { '관리자 권한으로 실행 중입니다.' }
-                    else { '⚠ 관리자 권한이 아닙니다. 차단(앱 제거)과 PC 전체 정책 변경은 관리자 PowerShell 에서 실행해야 합니다.' }
+                    else { '⚠ 관리자 권한이 아닙니다. PC 전체 정책과 앱을 변경하려면 관리자 권한으로 실행하세요.' }
 $ui.txtAdmin.Foreground = if ($isAdmin) { 'Green' } else { 'DarkOrange' }
 
 $ui.btnWinStatus.Add_Click({
@@ -526,13 +618,15 @@ $ui.btnWinStatus.Add_Click({
 })
 
 $ui.btnWinDisable.Add_Click({
-    if (-not (Confirm-Ui "이 PC 의 Windows Copilot 을 차단합니다.`n(정책 설정 + Copilot 앱 제거 + Edge 사이드바 차단)")) { return }
-    Invoke-Ui 'Windows Copilot 차단' { Disable-WindowsCopilot; $ui.gridWin.ItemsSource = @(Get-WindowsCopilotStatus) }
+    $scopeLabel = if ($ui.rbMachine.IsChecked) { '이 PC의 모든 사용자' } else { '현재 사용자' }
+    if (-not (Confirm-Ui "적용 범위: $scopeLabel`nCopilot 정책과 Edge 사이드바 정책을 설정하고 Copilot 앱을 제거합니다.")) { return }
+    Invoke-Ui 'Windows Copilot 차단' -SummarizeChanges { Disable-WindowsCopilot; $ui.gridWin.ItemsSource = @(Get-WindowsCopilotStatus) }
 })
 
 $ui.btnWinEnable.Add_Click({
-    if (-not (Confirm-Ui "이 PC 의 Windows Copilot 차단 정책을 해제합니다.")) { return }
-    Invoke-Ui 'Windows Copilot 해제' { Enable-WindowsCopilot; $ui.gridWin.ItemsSource = @(Get-WindowsCopilotStatus) }
+    $scopeLabel = if ($ui.rbMachine.IsChecked) { '이 PC의 모든 사용자' } else { '현재 사용자' }
+    if (-not (Confirm-Ui "적용 범위: $scopeLabel`nWindows Copilot 차단 정책을 해제합니다. 제거된 앱은 별도로 설치해야 합니다.")) { return }
+    Invoke-Ui 'Windows Copilot 해제' -SummarizeChanges { Enable-WindowsCopilot; $ui.gridWin.ItemsSource = @(Get-WindowsCopilotStatus) }
 })
 #endregion
 
