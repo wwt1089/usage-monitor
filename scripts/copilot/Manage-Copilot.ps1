@@ -37,7 +37,8 @@
     필요 모듈 : Microsoft.Graph.Authentication, Microsoft.Graph.Users,
                 Microsoft.Graph.Groups, Microsoft.Graph.Identity.DirectoryManagement
                 (Install-Module Microsoft.Graph -Scope CurrentUser)
-    필요 역할 : License Administrator 또는 User Administrator (그룹 라이선스는 Groups Administrator 이상)
+    필요 역할 : 작업별 최소 역할/Graph 권한과 사전 조직 설정은 README.md 참고
+                (미사용자 조회는 '보고서 사용자 이름 숨김 해제' 조직 설정 필요)
     CSV 형식  : 헤더에 UserPrincipalName 컬럼 필수
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
