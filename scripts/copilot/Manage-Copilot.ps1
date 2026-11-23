@@ -42,7 +42,7 @@
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
-    [Parameter(Mandatory)]
+    # 생략 시: 함수만 로드 (GUI 에서 dot-source 용)
     [ValidateSet('Status', 'List', 'Grant', 'Revoke', 'GrantGroup', 'RevokeGroup', 'Sync', 'Inactive',
                  'WinDisable', 'WinEnable', 'WinStatus')]
     [string]$Action,
@@ -83,6 +83,11 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# GUI 연동용 상태 (StrictMode 에서 미정의 변수 오류 방지)
+if (-not (Test-Path variable:script:GuiMode))  { $script:GuiMode  = $false }
+if (-not (Test-Path variable:script:GuiWhatIf)) { $script:GuiWhatIf = $true }
+if (-not (Test-Path variable:script:LogSink))  { $script:LogSink  = $null }
+
 #region ── 공통 유틸 ───────────────────────────────────────────────
 function Write-Log {
     param([string]$Target, [string]$Operation, [string]$Result, [string]$Detail = '')
@@ -95,10 +100,24 @@ function Write-Log {
         Detail    = $Detail
     }
     $color = switch ($Result) { 'OK' { 'Green' } 'SKIP' { 'Yellow' } 'WHATIF' { 'Cyan' } 'INFO' { 'Gray' } default { 'Red' } }
-    Write-Host ("[{0}] {1,-12} {2,-40} {3}" -f $Result, $Operation, $Target, $Detail) -ForegroundColor $color
-    if (-not $WhatIfPreference) {
+    $line = "[{0}] {1,-12} {2,-40} {3}" -f $Result, $Operation, $Target, $Detail
+    if ($script:LogSink) { & $script:LogSink $line $Result } else { Write-Host $line -ForegroundColor $color }
+    if (-not (Test-Simulation)) {
         $row | Export-Csv -Path $LogPath -Append -NoTypeInformation -Encoding UTF8
     }
+}
+
+# 시뮬레이션 여부: GUI 모드면 GUI 체크박스, 아니면 -WhatIf
+function Test-Simulation {
+    if ($script:GuiMode) { return [bool]$script:GuiWhatIf }
+    return [bool]$WhatIfPreference
+}
+
+# 변경 실행 여부: GUI 모드면 시뮬레이션 체크로, CLI 면 ShouldProcess(-WhatIf/-Confirm)로 판단
+function Confirm-Change {
+    param([string]$Target, [string]$Operation)
+    if ($script:GuiMode) { return -not $script:GuiWhatIf }
+    return $PSCmdlet.ShouldProcess($Target, $Operation)
 }
 
 function Get-TargetUsers {
@@ -118,9 +137,10 @@ function Get-TargetUsers {
 }
 
 function Assert-Admin {
+    param([switch]$Always)
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $isAdmin = ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin -and ($Scope -eq 'Machine' -or $Action -eq 'WinDisable')) {
+    if (-not $isAdmin -and ($Always -or $Scope -eq 'Machine')) {
         throw "관리자 권한 PowerShell 에서 실행하세요. (Scope=Machine 또는 앱 제거 작업)"
     }
 }
@@ -156,7 +176,7 @@ function Get-CopilotSku {
     return $sku
 }
 
-function Show-Status {
+function Get-CopilotStatus {
     $sku = Get-CopilotSku
     $total = $sku.PrepaidUnits.Enabled
     [pscustomobject]@{
@@ -167,8 +187,10 @@ function Show-Status {
         Available     = $total - $sku.ConsumedUnits
         Suspended     = $sku.PrepaidUnits.Suspended
         Warning       = $sku.PrepaidUnits.Warning
-    } | Format-List
+    }
 }
+
+function Show-Status { Get-CopilotStatus | Format-List }
 
 function Get-CopilotUsers {
     $sku = Get-CopilotSku
@@ -204,7 +226,7 @@ function Grant-CopilotLicense {
             if ($available -le 0) {
                 Write-Log $upn 'Grant' 'FAIL' '잔여 라이선스 없음'; continue
             }
-            if ($PSCmdlet.ShouldProcess($upn, "Copilot 라이선스 부여")) {
+            if ((Confirm-Change -Target $upn -Operation "Copilot 라이선스 부여")) {
                 if (-not $u.UsageLocation) {
                     Update-MgUser -UserId $u.Id -UsageLocation $UsageLocation
                 }
@@ -243,7 +265,7 @@ function Revoke-CopilotLicense {
                         Write-Log $upn 'Revoke' 'FAIL' "동적 그룹($($grp.DisplayName)) - 멤버십 규칙을 수정해야 함"
                         continue
                     }
-                    if ($PSCmdlet.ShouldProcess("$upn ← $($grp.DisplayName)", "라이선스 그룹에서 제외")) {
+                    if ((Confirm-Change -Target "$upn ← $($grp.DisplayName)" -Operation "라이선스 그룹에서 제외")) {
                         Remove-MgGroupMemberDirectoryObjectByRef -GroupId $grp.Id -DirectoryObjectId $u.Id
                         Write-Log $upn 'Revoke' 'OK' "그룹에서 제외: $($grp.DisplayName)"
                     } else {
@@ -255,7 +277,7 @@ function Revoke-CopilotLicense {
             if ($byGroup) {
                 Write-Log $upn 'Revoke' 'INFO' '직접 할당분만 회수됨 - 그룹 상속 라이선스는 유지'
             }
-            if ($PSCmdlet.ShouldProcess($upn, "Copilot 라이선스 회수")) {
+            if ((Confirm-Change -Target $upn -Operation "Copilot 라이선스 회수")) {
                 Set-MgUserLicense -UserId $u.Id -AddLicenses @() -RemoveLicenses @($sku.SkuId) | Out-Null
                 Write-Log $upn 'Revoke' 'OK'
             } else {
@@ -278,7 +300,7 @@ function Set-CopilotGroupLicense {
     if (-not $grp.SecurityEnabled) { throw "그룹 기반 라이선스는 보안 그룹만 가능합니다: $Name" }
 
     $op = if ($Remove) { 'RevokeGroup' } else { 'GrantGroup' }
-    if ($PSCmdlet.ShouldProcess($Name, $op)) {
+    if ((Confirm-Change -Target $Name -Operation $op)) {
         try {
             if ($Remove) {
                 Set-MgGroupLicense -GroupId $grp.Id -AddLicenses @() -RemoveLicenses @($sku.SkuId) | Out-Null
@@ -487,19 +509,21 @@ function Invoke-InactiveReview {
 #endregion
 
 #region ── Windows 로컬 Copilot 제어 ───────────────────────────────
-$Hive = if ($Scope -eq 'Machine') { 'HKLM:' } else { 'HKCU:' }
-$WinPolicies = @(
+function Get-WinPolicies {
+    $Hive = if ($Scope -eq 'Machine') { 'HKLM:' } else { 'HKCU:' }
+    @(
     # Windows Copilot (구형 사이드바) 끄기
     @{ Path = "$Hive\Software\Policies\Microsoft\Windows\WindowsCopilot"; Name = 'TurnOffWindowsCopilot'; Off = 1 }
     # Edge 사이드바(Copilot 버튼) 끄기 - Edge 정책은 HKLM/HKCU 모두 지원
     @{ Path = "$Hive\Software\Policies\Microsoft\Edge"; Name = 'HubsSidebarEnabled'; Off = 0 }
-)
+    )
+}
 $CopilotAppPattern = 'Microsoft.Copilot*'   # 신형 Copilot 앱 (M365 Copilot 앱 Microsoft.MicrosoftOfficeHub 는 제외)
 
 function Disable-WindowsCopilot {
-    Assert-Admin
-    foreach ($p in $WinPolicies) {
-        if ($PSCmdlet.ShouldProcess("$($p.Path)\$($p.Name)", "정책 설정 = $($p.Off)")) {
+    Assert-Admin -Always
+    foreach ($p in (Get-WinPolicies)) {
+        if ((Confirm-Change -Target "$($p.Path)\$($p.Name)" -Operation "정책 설정 = $($p.Off)")) {
             try {
                 if (-not (Test-Path $p.Path)) { New-Item -Path $p.Path -Force | Out-Null }
                 New-ItemProperty -Path $p.Path -Name $p.Name -Value $p.Off -PropertyType DWord -Force | Out-Null
@@ -511,7 +535,7 @@ function Disable-WindowsCopilot {
     # 설치된 Copilot 앱 제거 (모든 사용자)
     $pkgs = Get-AppxPackage -AllUsers -Name $CopilotAppPattern -ErrorAction SilentlyContinue
     foreach ($pkg in $pkgs) {
-        if ($PSCmdlet.ShouldProcess($pkg.PackageFullName, "앱 제거")) {
+        if ((Confirm-Change -Target $pkg.PackageFullName -Operation "앱 제거")) {
             try {
                 Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers
                 Write-Log $pkg.Name 'WinDisable' 'OK' '앱 제거'
@@ -521,7 +545,7 @@ function Disable-WindowsCopilot {
     # 신규 사용자 프로필에 재설치되지 않도록 프로비저닝 패키지 제거
     $prov = Get-AppxProvisionedPackage -Online | Where-Object DisplayName -like $CopilotAppPattern
     foreach ($pp in $prov) {
-        if ($PSCmdlet.ShouldProcess($pp.PackageName, "프로비저닝 제거")) {
+        if ((Confirm-Change -Target $pp.PackageName -Operation "프로비저닝 제거")) {
             try {
                 Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName | Out-Null
                 Write-Log $pp.DisplayName 'WinDisable' 'OK' '프로비저닝 제거'
@@ -533,9 +557,9 @@ function Disable-WindowsCopilot {
 
 function Enable-WindowsCopilot {
     Assert-Admin
-    foreach ($p in $WinPolicies) {
+    foreach ($p in (Get-WinPolicies)) {
         if ((Test-Path $p.Path) -and (Get-ItemProperty -Path $p.Path -Name $p.Name -ErrorAction SilentlyContinue)) {
-            if ($PSCmdlet.ShouldProcess("$($p.Path)\$($p.Name)", "정책 제거")) {
+            if ((Confirm-Change -Target "$($p.Path)\$($p.Name)" -Operation "정책 제거")) {
                 Remove-ItemProperty -Path $p.Path -Name $p.Name -Force
                 Write-Log $p.Name 'WinEnable' 'OK' $p.Path
             }
@@ -546,21 +570,30 @@ function Enable-WindowsCopilot {
     Write-Host "정책 해제 완료. Copilot 앱은 Microsoft Store 또는 'winget install 9NHT9RB2F4HD' 로 재설치하세요." -ForegroundColor Green
 }
 
-function Show-WindowsCopilotStatus {
-    $rows = foreach ($h in 'HKLM:', 'HKCU:') {
-        foreach ($p in $WinPolicies) {
+function Get-WindowsCopilotStatus {
+    foreach ($h in 'HKLM:', 'HKCU:') {
+        foreach ($p in (Get-WinPolicies)) {
             $path = $p.Path -replace '^HK(LM|CU):', $h
             $val  = (Get-ItemProperty -Path $path -Name $p.Name -ErrorAction SilentlyContinue).$($p.Name)
             [pscustomobject]@{ Hive = $h; Policy = $p.Name; Value = if ($null -eq $val) { '(미설정)' } else { $val } }
         }
     }
-    $rows | Format-Table -AutoSize
     $apps = Get-AppxPackage -Name $CopilotAppPattern -ErrorAction SilentlyContinue
-    Write-Host ("Copilot 앱 설치 여부(현재 사용자): {0}" -f $(if ($apps) { $apps.Version -join ', ' } else { '없음' }))
+    [pscustomobject]@{ Hive = 'App'; Policy = 'Copilot 앱(현재 사용자)'; Value = if ($apps) { $apps.Version -join ', ' } else { '미설치' } }
 }
+
+function Show-WindowsCopilotStatus { Get-WindowsCopilotStatus | Format-Table -AutoSize }
 #endregion
 
 #region ── 실행 ────────────────────────────────────────────────────
+if (-not $Action) {
+    # dot-source(. .\Manage-Copilot.ps1) 시에는 함수만 로드하고 종료
+    if ($MyInvocation.InvocationName -ne '.') {
+        Write-Host "사용법: .\Manage-Copilot.ps1 -Action <Status|List|Grant|Revoke|GrantGroup|RevokeGroup|Sync|Inactive|WinDisable|WinEnable|WinStatus>"
+        Write-Host "화면(GUI): .\Copilot-Manager-GUI.ps1"
+    }
+    return
+}
 try {
     if ($Action -notlike 'Win*') { Connect-CopilotGraph }
 
