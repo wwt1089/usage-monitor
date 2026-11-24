@@ -1,0 +1,221 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "M365 Copilot Licenses",
+    "description": "Microsoft Graph 로 Copilot 라이선스 현황·보유자·사용 리포트를 읽고 직접 할당을 부여·회수한다. 로그인한 관리자의 위임 권한으로 호출한다.",
+    "version": "0.1"
+  },
+  "host": "graph.microsoft.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "oauth2_auth": {
+      "type": "oauth2",
+      "flow": "accessCode",
+      "authorizationUrl": "https://login.microsoftonline.com/common/oauth2/authorize",
+      "tokenUrl": "https://login.windows.net/common/oauth2/authorize",
+      "scopes": {}
+    }
+  },
+  "security": [
+    {
+      "oauth2_auth": []
+    }
+  ],
+  "paths": {
+    "/v1.0/subscribedSkus": {
+      "get": {
+        "operationId": "ListSubscribedSkus",
+        "summary": "구독 SKU 목록",
+        "description": "구독 SKU 목록",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/v1.0/users": {
+      "get": {
+        "operationId": "ListUsers",
+        "summary": "사용자 목록",
+        "description": "사용자 목록",
+        "parameters": [
+          {
+            "name": "$filter",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "OData 필터. 예: assignedLicenses/any(x:x/skuId eq <SKU ID>)"
+          },
+          {
+            "name": "$select",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "받을 속성 (쉼표 구분)"
+          },
+          {
+            "name": "$top",
+            "in": "query",
+            "type": "integer",
+            "required": true,
+            "description": "한 번에 받을 개수 (최대 999)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/v1.0/users/{user_id}": {
+      "get": {
+        "operationId": "GetUser",
+        "summary": "사용자 한 명",
+        "description": "사용자 한 명",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "description": "사용자 ID 또는 UPN"
+          },
+          {
+            "name": "$select",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "받을 속성 (쉼표 구분)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/v1.0/users/{user_id}/assignLicense": {
+      "post": {
+        "operationId": "AssignLicense",
+        "summary": "라이선스 부여·회수",
+        "description": "직접 할당만 바꾼다. 그룹에서 상속받은 라이선스는 이 동작으로 회수되지 않는다.",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "description": "사용자 ID"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "addLicenses",
+                "removeLicenses"
+              ],
+              "properties": {
+                "addLicenses": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "skuId": {
+                        "type": "string"
+                      },
+                      "disabledPlans": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "removeLicenses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/beta/reports/getMicrosoft365CopilotUsageUserDetail(period='{period}')": {
+      "get": {
+        "operationId": "GetCopilotUsageUserDetail",
+        "summary": "Copilot 사용자별 사용 리포트",
+        "description": "사용자별 마지막 사용일. Reports.Read.All 권한과 Reports Reader 역할이 필요하다.",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "enum": [
+              "D7",
+              "D30",
+              "D90",
+              "D180"
+            ],
+            "description": "집계 기간"
+          },
+          {
+            "name": "$format",
+            "in": "query",
+            "type": "string",
+            "required": true,
+            "description": "응답 형식",
+            "enum": [
+              "application/json"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}

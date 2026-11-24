@@ -1,0 +1,71 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "ChatGPT Admin",
+    "description": "ChatGPT Enterprise·Edu 워크스페이스 사용자 조회(워크스페이스 Admin API). 초대·제거·사용량 동작은 Admin API reference 로 주소를 확인한 뒤 추가한다.",
+    "version": "0.1"
+  },
+  "host": "api.chatgpt.com",
+  "basePath": "/v1",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "in": "header",
+      "name": "Authorization"
+    }
+  },
+  "security": [
+    {
+      "api_key": []
+    }
+  ],
+  "paths": {
+    "/manage/workspaces/{workspace_id}/users": {
+      "get": {
+        "operationId": "ListWorkspaceUsers",
+        "summary": "워크스페이스 사용자 목록",
+        "description": "워크스페이스 사용자 목록",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "type": "string",
+            "required": true,
+            "description": "워크스페이스 ID"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "type": "integer",
+            "required": false,
+            "description": "한 번에 받을 개수"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "type": "string",
+            "required": false,
+            "description": "다음 쪽 커서"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Cursor Admin",
+    "description": "Cursor 팀 멤버·사용량·지출 조회와 멤버 제거(Admin API). 인증은 Basic 이며 사용자 이름에 API 키를 넣고 비밀번호는 비운다.",
+    "version": "0.1"
+  },
+  "host": "api.cursor.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "securityDefinitions": {
+    "basic_auth": {
+      "type": "basic"
+    }
+  },
+  "security": [
+    {
+      "basic_auth": []
+    }
+  ],
+  "paths": {
+    "/teams/members": {
+      "get": {
+        "operationId": "GetTeamMembers",
+        "summary": "팀 멤버 목록",
+        "description": "팀 멤버 목록",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/teams/spend": {
+      "post": {
+        "operationId": "GetSpend",
+        "summary": "이번 결제 주기의 멤버별 지출",
+        "description": "이번 결제 주기의 멤버별 지출",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "page": {
+                  "type": "integer"
+                },
+                "pageSize": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/teams/daily-usage-data": {
+      "post": {
+        "operationId": "GetDailyUsageData",
+        "summary": "일별 사용 기록",
+        "description": "일별 사용 기록",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "startDate",
+                "endDate"
+              ],
+              "properties": {
+                "startDate": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "시작 시각 (epoch 밀리초)"
+                },
+                "endDate": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "끝 시각 (epoch 밀리초). 한 번에 30일까지"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "/teams/remove-member": {
+      "post": {
+        "operationId": "RemoveMember",
+        "summary": "팀에서 멤버 제거",
+        "description": "email 이나 userId 중 하나로 지정한다. Enterprise 플랜에서만 동작한다.",
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "userId": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}
